@@ -128,6 +128,64 @@ function isIdentPart(c: string): boolean {
     return /[A-Za-z0-9_$]/.test(c);
 }
 
+/**
+ * 扫描源码中**裸引用**给定标识符的位置（跳过注释与字符串）。
+ * 用于判定是否需要注入 process / Buffer 全局（避免被注释/文档字符串误触）。
+ *
+ * 「裸引用」判定：
+ *   - 标识符位于注释/字符串之外（词法扫描保证）
+ *   - 其前一非空白字符不是 `.`（排除 `foo.process` 属性访问）
+ *   - 其后一非空白字符不是 `:`（粗略排除对象键 `{ process: ... }`）
+ * 返回命中的标识符名集合（去重）。
+ */
+export function scanGlobalRefs(code: string, names: string[]): string[] {
+    const want = new Set(names);
+    const hit = new Set<string>();
+    const n = code.length;
+    let i = 0;
+    while (i < n) {
+        const c = code[i];
+        // 行注释
+        if (c === '/' && code[i + 1] === '/') {
+            i += 2;
+            while (i < n && code[i] !== '\n') i += 1;
+            continue;
+        }
+        // 块注释
+        if (c === '/' && code[i + 1] === '*') {
+            i += 2;
+            while (i < n && !(code[i] === '*' && code[i + 1] === '/')) i += 1;
+            i += 2;
+            continue;
+        }
+        // 字符串
+        if (c === '"' || c === '\'' || c === '`') {
+            i = skipString(code, i, c);
+            continue;
+        }
+        // 标识符
+        if (isIdentStart(c)) {
+            const start = i;
+            while (i < n && isIdentPart(code[i])) i += 1;
+            const word = code.slice(start, i);
+            if (want.has(word)) {
+                // 前一非空白字符
+                let p = start - 1;
+                while (p >= 0 && /\s/.test(code[p])) p -= 1;
+                const prevIsDot = (p >= 0 && code[p] === '.');
+                // 后一非空白字符
+                let q = i;
+                while (q < n && /\s/.test(code[q])) q += 1;
+                const nextIsColon = (q < n && code[q] === ':');
+                if (!prevIsDot && !nextIsColon) hit.add(word);
+            }
+            continue;
+        }
+        i += 1;
+    }
+    return Array.from(hit);
+}
+
 /** 从 start（引号处）跳到字符串结束后的位置；返回结束索引（不含闭引号）的下一位置 */
 function skipString(code: string, start: number, quote: string): number {
     const n = code.length;

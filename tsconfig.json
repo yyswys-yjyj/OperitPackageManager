@@ -4,6 +4,7 @@
     "module": "commonjs",
     "lib": ["es2020"],
     "moduleResolution": "node",
+    "ignoreDeprecations": "6.0",
     "strict": false,
     "noImplicitAny": false,
     "esModuleInterop": true,

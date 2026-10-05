@@ -3,8 +3,8 @@ METADATA
 {
     "name": "opm",
     "description": {
-        "zh": "【开发工具】适用于 Operit 开发工程的类 npm 包管理工具，提供 init / search / install / remove / manager 五个工具",
-        "en": "[Development Tools] A npm-like package management tool for Operit development projects, offering five commands: init, search, install, remove, and manager"
+        "zh": "【开发工具】适用于 Operit 开发工程的类 npm 包管理工具，提供 init / search / install / remove / manager / build / verify / pack / version 九个工具",
+        "en": "[Development Tools] A npm-like package management tool for Operit development projects, offering: init, search, install, remove, manager, build, verify, pack, version"
     },
     "enabledByDefault": true,
     "env": [],
@@ -60,25 +60,37 @@ METADATA
         {
             "name": "install",
             "description": {
-                "zh": "安装包并处理依赖。可传包名列表（如 lodash 或 @scope/pkg@^1.0.0）；不传参数则按项目 package.json 安装全部依赖。会写入 node_modules 与 package-lock.json。",
-                "en": "Install packages and resolve dependencies. Pass package specs, or omit to install everything from package.json. Writes node_modules and package-lock.json."
+                "zh": "安装包。三种用法：① 传 packages 包名列表，从 registry 解析并装进项目 node_modules（写 package-lock.json）；② 不传 packages，按项目 package.json 安装全部依赖；③ 传 tgz_path 安装本地 .tgz（npm pack 产物），配合 global=true 装到 npm 全局目录（/usr/lib/node_modules）。本地 tgz 安装不做依赖解析，只装该包本身。",
+                "en": "Install packages. Three usages: (1) pass packages specs to resolve from registry into node_modules (writes lockfile); (2) omit packages to install everything from package.json; (3) pass tgz_path to install a local .tgz (npm pack output), with global=true installing into the npm global dir (/usr/lib/node_modules). Local tgz install does not resolve dependencies."
             },
             "parameters": [
                 {
                     "name": "project_dir",
-                    "description": { "zh": "项目根目录绝对路径", "en": "Absolute project root path" },
-                    "type": "string",
-                    "required": true
-                },
-                {
-                    "name": "packages",
-                    "description": { "zh": "要安装的包规格，多个用空格或逗号分隔（可选）", "en": "Package specs, space/comma separated (optional)" },
+                    "description": { "zh": "项目根目录绝对路径。装本地 tgz 到全局时可不传。", "en": "Absolute project root. Optional when installing a local tgz globally." },
                     "type": "string",
                     "required": false
                 },
                 {
+                    "name": "packages",
+                    "description": { "zh": "要安装的包规格，多个用空格或逗号分隔（可选）。与 tgz_path 二选一。", "en": "Package specs, space/comma separated (optional). Mutually exclusive with tgz_path." },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "tgz_path",
+                    "description": { "zh": "本地 .tgz 文件绝对路径（可选）。传了就装本地包，忽略 packages。", "en": "Absolute path to a local .tgz (optional). If given, installs the local package and ignores packages." },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "global",
+                    "description": { "zh": "是否全局安装，默认 false。true 时装到 npm 全局目录（Linux 侧 /usr/lib/node_modules），仅对 tgz_path 生效。", "en": "Install globally, default false. When true installs into the npm global dir (Linux /usr/lib/node_modules); only applies to tgz_path." },
+                    "type": "boolean",
+                    "required": false
+                },
+                {
                     "name": "save",
-                    "description": { "zh": "是否写入 package.json 的 dependencies，默认 true", "en": "Write to package.json dependencies, default true" },
+                    "description": { "zh": "是否写入 package.json 的 dependencies，默认 true（仅 registry 安装与项目内 tgz 安装）。", "en": "Write to package.json dependencies, default true (registry install and in-project tgz install only)." },
                     "type": "boolean",
                     "required": false
                 }
@@ -87,21 +99,27 @@ METADATA
         {
             "name": "remove",
             "description": {
-                "zh": "卸载包：从 node_modules 删除目录，并从 package.json 依赖与 package-lock.json 中清理。",
-                "en": "Remove packages: delete from node_modules and clean up package.json / package-lock.json."
+                "zh": "卸载包。两种用法：① 普通模式（传 project_dir）：从项目 node_modules 删目录，并清理 package.json 依赖与 package-lock.json；② 全局模式（传 global=true）：从 npm 全局安装目录（/usr/lib/node_modules）删除包，无需 project_dir。",
+                "en": "Remove packages. Two usages: (1) project mode (pass project_dir): delete from the project node_modules and clean up package.json / package-lock.json; (2) global mode (pass global=true): delete from the npm global dir (/usr/lib/node_modules), no project_dir needed."
             },
             "parameters": [
                 {
                     "name": "project_dir",
-                    "description": { "zh": "项目根目录绝对路径", "en": "Absolute project root path" },
+                    "description": { "zh": "项目根目录绝对路径。全局卸载时可不传。", "en": "Absolute project root. Optional when removing globally." },
                     "type": "string",
-                    "required": true
+                    "required": false
                 },
                 {
                     "name": "packages",
                     "description": { "zh": "要卸载的包名，多个用空格或逗号分隔", "en": "Package names, space/comma separated" },
                     "type": "string",
                     "required": true
+                },
+                {
+                    "name": "global",
+                    "description": { "zh": "可选，默认 false。传 true 时从 npm 全局目录（/usr/lib/node_modules）卸载。", "en": "Optional, default false. If true, removes from the npm global dir (/usr/lib/node_modules)." },
+                    "type": "boolean",
+                    "required": false
                 }
             ]
         },
@@ -345,8 +363,8 @@ METADATA
         {
             "name": "build",
             "description": {
-                "zh": "【何时用】当你要把「一个用 TypeScript 写的 Operit 工程」变成一个「可以直接烧录/分发的 .toolpkg」时用。典型场景：用户说『把这个项目打包』『编译出包』『build 一下』，或你在写完一个 toolpkg 工程源码后要产出发布物。\n\n【前提条件（缺一不可，否则报错并停在对应阶段）】\n1) 项目根目录下必须有 manifest.json（含 main 字段，如 \"main\":\"main.js\"）；\n2) 项目里必须已安装 @serveryyswys/node.operit（即存在 node_modules/@serveryyswys/node.operit/BUILTINS.json）——这是构建期唯一事实来源，没有它会直接失败并提示先执行 init / install；\n3) 若 tsconfig.json 存在则用它编译（输出目录被强制覆盖为 .opm_build）；若没有 tsconfig.json，则自动以 src 目录下所有 .ts 全量编译。\n\n【它做了什么（全自动，无需手动 tsc/改路径）】\n1. 调 tsc 把 TS 编译成 JS（输出到 .opm_build/）；\n2. 从 manifest.main 出发做「可达性分析」：只顺着 require 链收集真正被引用到的文件，未被引用的源码不会进包；\n3. 把所有「裸名 require」重写为归档内显式 .js 相对路径——node 内建（如 node:fs）映射到 node.operit 的子文件，npm 包（如 lodash 的第三方包）映射到它在 node_modules 里的入口；唯独 lodash/uuid/axios 三个被 operit 内置、保持原样；\n4. 若契约里某个被引用的内建是 planned/unsupported，构建失败（防止打出跑不起来的包）；\n5. 在入口注入 process/Buffer 全局（因为 operit 运行时不提供这两个全局）；\n6. 只打包「被引用到的」node_modules，压成 <项目根目录名>.toolpkg（放在项目根的上一级目录）。\n\n【产物】toolpkg_path 给出 .toolpkg 绝对路径；data 里还返回 file_count / bare_names / violations / missing，便于核对。\n\n【失败时怎么看】message 会拼上失败阶段（stage）与原因：\n- stage=manifest：没找到/解析不了 manifest.json；\n- stage=contract：没装 node.operit；\n- stage=compile：tsc 编译报错，看 data.compile_stdout；\n- stage=contract-check：有 planned/unsupported 内建，看 data.violations；\n- stage=reachability：有 require 解析不出来，看 data.missing；\n- stage=pack：压缩失败。\n排查完可用 verify 先干跑一遍，不产包。\n\n【与 verify 的分工】build = verify 的全部校验 + 编译 + 打包；只想检查合法性、不想产出文件时用 verify。",
-                "en": "WHEN TO USE: when you need to turn a TypeScript-based Operit project into a flashable/distributable .toolpkg. Typical: user says 'pack this project' / 'build it', or you just finished writing toolpkg source and need a release artifact.\n\nPREREQUISITES (all required; otherwise it errors and stops at the matching stage):\n1) manifest.json in the project root with a 'main' field (e.g. \"main\":\"main.js\");\n2) @serveryyswys/node.operit installed in the project (node_modules/@serveryyswys/node.operit/BUILTINS.json) — this is the single source of truth for the build; missing it fails immediately with a hint to run init/install first;\n3) if tsconfig.json exists it is used (outDir overridden to .opm_build); if not, all .ts under src/ is compiled wholesale.\n\nWHAT IT DOES (fully automatic; no manual tsc or path editing):\n1. compiles TS to JS via tsc into .opm_build/;\n2. reachability analysis from manifest.main: only files actually required are collected; unreferenced sources are excluded;\n3. rewrites every BARE require into an explicit archive-relative .js path — node builtins (e.g. node:fs) map into node.operit subfiles, third-party npm packages map to their node_modules entry; only lodash/uuid/axios are kept as-is (operit provides them);\n4. if any referenced builtin is planned/unsupported per the contract, the build FAILS (prevents shipping a broken package);\n5. injects process/Buffer globals at the entry (operit runtime lacks them);\n6. packs ONLY referenced node_modules and zips into <projectRootFolder>.toolpkg (written to the parent of the project root).\n\nOUTPUT: toolpkg_path gives the absolute .toolpkg path; data also returns file_count / bare_names / violations / missing.\n\nON FAILURE: message includes the failing stage: manifest | contract | compile (see data.compile_stdout) | contract-check (see data.violations) | reachability (see data.missing) | pack. Use verify to dry-run without producing a package.\n\nVS verify: build = all of verify's checks + compile + pack; use verify when you only want to validate without producing files."
+                "zh": "【何时用】当你要把「一个 Operit 工程」变成一个「可以直接烧录/分发的 .toolpkg」时用——**TS 工程和纯 JS 工程都支持**。典型场景：用户说『把这个项目打包』『编译出包』『build 一下』，或你在写完一个 toolpkg 工程源码后要产出发布物。\n\n【两种模式（自动识别，无需你指定）】\n· TS 模式：项目里有 tsconfig.json，或 src 下存在 .ts 文件 → 先调 tsc 编译，再以编译产物为根打包。\n· JS 模式：纯 JS 工程（无 tsconfig / 无 .ts）→ 跳过编译，直接以项目根为根打包；项目下所有 .js/.mjs/.cjs（排除 node_modules）都会进包，因此子包入口、UI 模块等「不在 main 的 require 链上」的文件也不会漏。\n\n【前提条件（缺一不可，否则报错并停在对应阶段）】\n1) 项目根目录下必须有 manifest.json（含 main 字段，如 \"main\":\"main.js\"）；\n2) 项目里必须已安装 @serveryyswys/node.operit（即存在 node_modules/@serveryyswys/node.operit/BUILTINS.json）——这是构建期唯一事实来源，没有它会直接失败并提示先执行 init / install。\n\n【它做了什么（全自动）】\n1.（仅 TS 模式）调 tsc 编译到 .opm_build/；\n2. 计算「可达种子」：manifest.main + manifest.subpackages[].entry + manifest 里声明的 ui 模块（JS 模式额外把项目下全部工程 js 当种子）；\n3. 从种子顺着 require 链递归收集真正被引用到的文件，并做「可达性裁剪」；\n4. 把所有「裸名 require」重写为归档内显式 .js 相对路径——node 内建（如 node:fs）映射到 node.operit 的子文件，npm 包映射到它在 node_modules 里的入口；唯独 lodash/uuid/axios 三个被 operit 内置、保持原样；\n5. 若契约里某个被引用的内建是 planned/unsupported，构建失败（防止打出跑不起来的包）；\n6. 在入口注入 process/Buffer 全局（因为 operit 运行时不提供这两个全局）；\n7. 只打包「被引用到的」node_modules，压成 <项目根目录名>.toolpkg（放在项目根的上一级目录）。\n\n【产物】toolpkg_path 给出 .toolpkg 绝对路径；data.mode 给出识别到的模式（ts/js）；data 里还返回 file_count / bare_names / violations / missing，便于核对。\n\n【失败时怎么看】message 会拼上失败阶段（stage）与原因：\n- stage=manifest：没找到/解析不了 manifest.json；\n- stage=contract：没装 node.operit；\n- stage=compile：tsc 编译报错，看 data.compile_stdout；\n- stage=contract-check：有 planned/unsupported 内建，看 data.violations；\n- stage=reachability：有 require 解析不出来，看 data.missing；\n- stage=pack：压缩失败。\n排查完可用 verify 先干跑一遍，不产包。\n\n【与 verify 的分工】build = verify 的全部校验 + 编译 + 打包；只想检查合法性、不想产出文件时用 verify。",
+                "en": "WHEN TO USE: turn an Operit project into a flashable/distributable .toolpkg — supports BOTH TS and pure-JS projects. Typical: user says 'pack this project' / 'build it', or you just finished writing toolpkg source and need a release artifact.\n\nTWO MODES (auto-detected):\n- TS mode: tsconfig.json present, or .ts files under src/ -> runs tsc first, then packs the compiled output.\n- JS mode: pure-JS project (no tsconfig / no .ts) -> skips compilation, packs from the project root; every .js/.mjs/.cjs under the project (excluding node_modules) is included, so subpackage entries and UI modules not on main's require chain are never missed.\n\nPREREQUISITES (all required; otherwise it errors and stops at the matching stage):\n1) manifest.json in the project root with a 'main' field (e.g. \"main\":\"main.js\");\n2) @serveryyswys/node.operit installed in the project (node_modules/@serveryyswys/node.operit/BUILTINS.json) — the single source of truth for the build.\n\nWHAT IT DOES (fully automatic):\n1. (TS only) compiles TS to JS via tsc into .opm_build/;\n2. computes reachability seeds: manifest.main + manifest.subpackages[].entry + declared ui modules (JS mode additionally seeds all project .js files);\n3. walks the require chain from those seeds and collects only referenced files (reachability pruning);\n4. rewrites every BARE require into an explicit archive-relative .js path — node builtins (e.g. node:fs) map into node.operit subfiles, npm packages map to their node_modules entry; only lodash/uuid/axios are kept as-is;\n5. if any referenced builtin is planned/unsupported per the contract, the build FAILS;\n6. injects process/Buffer globals at the entry;\n7. packs ONLY referenced node_modules and zips into <projectRootFolder>.toolpkg (written to the parent of the project root).\n\nOUTPUT: toolpkg_path gives the absolute .toolpkg path; data.mode gives the detected mode (ts/js); data also returns file_count / bare_names / violations / missing.\n\nON FAILURE: message includes the failing stage: manifest | contract | compile (see data.compile_stdout) | contract-check (see data.violations) | reachability (see data.missing) | pack. Use verify to dry-run without producing a package.\n\nVS verify: build = all of verify's checks + compile + pack; use verify when you only want to validate without producing files."
             },
             "parameters": [
                 {
@@ -366,13 +384,19 @@ METADATA
                     "description": { "zh": "可选。产物文件名（不含 .toolpkg 后缀），默认取项目根目录名。例：传 \"myproj\" 得到 myproj.toolpkg。", "en": "Optional. Output file name without the .toolpkg suffix; defaults to the project root folder name." },
                     "type": "string",
                     "required": false
+                },
+                {
+                    "name": "extra_files",
+                    "description": { "zh": "可选。要额外强制打包的路径数组（相对项目根，如 [\"LICENSE\", \"assets\"]）。条目可以是文件或目录：文件原样复制；目录会递归收集其下全部文件（保持目录结构）。这些都不在 require 链上，原样复制进归档（不做重写）。适合把 LICENSE / README / 资源目录等带进发行包。", "en": "Optional. Array of extra paths (relative to project root, e.g. [\"LICENSE\",\"assets\"]). Entries may be files or directories; directories are recursively collected (structure preserved). All copied verbatim (no rewrite)." },
+                    "type": "array",
+                    "required": false
                 }
             ]
         },
         {
             "name": "verify",
             "description": {
-                "zh": "【何时用】出包前的「干跑校验」：想确认一个工程能否被打包、有没有解析不出来的依赖，但不想真的产出文件时用它。也用于 build 失败后的定位（它只跑校验阶段，报告更清晰）。典型场景：用户说『检查一下能不能打包』『为什么打包失败』，或你在 build 之前先自查。\n\n【前提条件】与 build 相同：需要 manifest.json（含 main）+ 已安装 node.operit。\n\n【它做了什么】编译（可选，同 build）+ 可达性分析 + 裸名重写解析 + 契约拦截，但**不压缩、不产出 .toolpkg**。与 build 共用全部前置校验逻辑，因此「verify 通过」基本等价于「build 只差最后打包那一步」。\n\n【返回】data 里给出 bare_names（扫到的所有裸名）、violations（planned/unsupported 违规）、missing（解析不出的 require）；成功时 message 报告可达文件数与裸名数。\n\n【失败时怎么看】stage 含义同 build：manifest / contract / compile / contract-check（看 violations）/ reachability（看 missing）。\n\n【与 build 的分工】只想校验不产包 → verify；要产出 .toolpkg → build。",
+                "zh": "【何时用】出包前的「干跑校验」：想确认一个工程能否被打包、有没有解析不出来的依赖，但不想真的产出文件时用它（**TS 工程和纯 JS 工程都支持**）。也用于 build 失败后的定位（它只跑校验阶段，报告更清晰）。典型场景：用户说『检查一下能不能打包』『为什么打包失败』，或你在 build 之前先自查。\n\n【前提条件】与 build 相同：需要 manifest.json（含 main）+ 已安装 node.operit。\n\n【它做了什么】模式识别 +（TS 模式）编译 + 可达性分析 + 裸名重写解析 + 契约拦截，但**不压缩、不产出 .toolpkg**。与 build 共用全部前置校验逻辑，因此「verify 通过」基本等价于「build 只差最后打包那一步」。\n\n【返回】data.mode 给出识别到的模式（ts/js）；data 里给出 bare_names（扫到的所有裸名）、violations（planned/unsupported 违规）、missing（解析不出的 require）；成功时 message 报告可达文件数与裸名数。\n\n【失败时怎么看】stage 含义同 build：manifest / contract / compile / contract-check（看 violations）/ reachability（看 missing）。\n\n【与 build 的分工】只想校验不产包 → verify；要产出 .toolpkg → build。",
                 "en": "WHEN TO USE: a dry-run validation before packaging — to confirm a project can be built and that no dependency fails to resolve, WITHOUT producing files. Also use it to diagnose a failed build (it runs only the check stages and reports more cleanly). Typical: user asks 'can this be packed?' / 'why did the build fail?', or you self-check before build.\n\nPREREQUISITES: same as build — manifest.json (with main) + node.operit installed.\n\nWHAT IT DOES: compile (optional, same as build) + reachability + bare-name resolution + contract checks, but does NOT zip and does NOT produce a .toolpkg. It shares all of build's validation logic, so a passing verify is essentially a build that only lacks the final pack step.\n\nOUTPUT: data gives bare_names, violations (planned/unsupported), missing (unresolvable requires); on success message reports reachable file count and bare-name count.\n\nON FAILURE: same stage meanings as build: manifest | contract | compile | contract-check (see violations) | reachability (see missing).\n\nVS build: validate only -> verify; produce a .toolpkg -> build."
             },
             "parameters": [
@@ -385,6 +409,60 @@ METADATA
                 {
                     "name": "skip_compile",
                     "description": { "zh": "可选，默认 false。传 true 跳过 tsc，直接用已有的 .opm_build/ 编译产物。", "en": "Optional, default false. If true, skip tsc and reuse the existing .opm_build/ output." },
+                    "type": "boolean",
+                    "required": false
+                },
+                {
+                    "name": "extra_files",
+                    "description": { "zh": "可选。与 build 的 extra_files 对应（同样支持文件或目录），用于校验这些额外路径是否存在且未被排除。", "en": "Optional. Same as build extra_files; validates the extra files exist and are not excluded." },
+                    "type": "array",
+                    "required": false
+                }
+            ]
+        },
+        {
+            "name": "pack",
+            "description": {
+                "zh": "【何时用】把一个项目目录打成 npm 兼容的 .tgz（等价于 `npm pack`）。用于：① 把库打包成可分发/可安装的归档；② 配合 install 的 tgz_path 做本地分发；③ 给辰锤投稿准备 npm 包体（可用 manager 的 file_upload 上传它）。\n\n【做什么】读项目 package.json 拿 name/version；把项目文件（排除 node_modules / .opm_build / .opm_stage / .git 等）复制进归档并以 package/ 为顶层前缀；输出 <name>-<version>.tgz。**不编译**——打的是当前目录状态，TS 源码要先自己编译好再 pack。\n\n【前提条件】项目根有 package.json（含 name）。\n\n【返回】data.tgz_path（产物绝对路径）、data.file_count（打进的文件数）、data.name / data.version。\n\n【与 build 的分工】pack = npm 生态的可安装归档（.tgz）；build = Operit 的 .toolpkg。两者用途不同，别混。",
+                "en": "WHEN TO USE: pack a project directory into an npm-compatible .tgz (equivalent to `npm pack`). For: (1) distributing a library as an installable archive; (2) local distribution with install tgz_path; (3) preparing an npm package body for Chenchui submission (upload via manager file_upload).\n\nWHAT IT DOES: reads package.json for name/version; copies project files (excluding node_modules / .opm_build / .opm_stage / .git etc.) into an archive with a package/ prefix; outputs <name>-<version>.tgz. Does NOT compile — it packs the current directory as-is; compile TS sources before packing.\n\nPREREQUISITE: package.json (with name) at the project root.\n\nOUTPUT: data.tgz_path, data.file_count, data.name, data.version.\n\nVS build: pack = npm-ecosystem installable archive (.tgz); build = Operit .toolpkg. Different purposes."
+            },
+            "parameters": [
+                {
+                    "name": "project_dir",
+                    "description": { "zh": "项目根目录绝对路径（需含 package.json）。", "en": "Absolute project root (must contain package.json)." },
+                    "type": "string",
+                    "required": true
+                },
+                {
+                    "name": "out_dir",
+                    "description": { "zh": "可选。产物输出目录绝对路径，默认项目根。", "en": "Optional. Absolute output dir for the .tgz; defaults to the project root." },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "out_name",
+                    "description": { "zh": "可选。产物文件名（不含 .tgz），默认 <name>-<version>。", "en": "Optional. Output file name without .tgz; defaults to <name>-<version>." },
+                    "type": "string",
+                    "required": false
+                }
+            ]
+        },
+        {
+            "name": "version",
+            "description": {
+                "zh": "【何时用】想一眼看清「装了哪些库、各自什么版本」时用它。典型场景：用户问『这个项目依赖什么版本』『全局装了什么』『列一下版本』『opm 现在什么版本』。\n\n【两种模式】\n· 传了 project_dir：列 ① 项目自身（package.json）；② 项目 node_modules 全部已装包（含 @scope/pkg）；③ opm 自身版本；可加 include_global=true 再列全局。\n· 不传 project_dir：直接列 npm 全局安装目录（/usr/lib/node_modules）里的全部已装包 + opm 自身。\n\n【前提条件】project_dir 传了就得存在；node_modules 可不存在（返回空列表）。不传则列全局。\n\n【返回】data.mode（project/global）；data.self / data.deps / data.globals / data.opm；global 模式另带 data.global_root。",
+                "en": "WHEN TO USE: to see at a glance which libraries are installed and their versions. Typical: 'what does this project depend on', 'what's installed globally', 'list versions', 'what version is opm'.\n\nTWO MODES:\n- With project_dir: lists (1) the project itself (package.json); (2) all packages in the project node_modules (incl. @scope/pkg); (3) opm's own version; add include_global=true to also list globals.\n- Without project_dir: lists all packages in the npm global dir (/usr/lib/node_modules) plus opm's own version.\n\nPREREQUISITE: if project_dir is given it must exist; node_modules may be absent (returns empty). Omit it to list globals.\n\nOUTPUT: data.mode (project/global); data.self / data.deps / data.globals / data.opm; global mode also returns data.global_root."
+            },
+            "parameters": [
+                {
+                    "name": "project_dir",
+                    "description": { "zh": "项目根目录绝对路径（可选）。不传则直接列 npm 全局安装目录（/usr/lib/node_modules）。", "en": "Absolute project root (optional). If omitted, lists the npm global dir (/usr/lib/node_modules) directly." },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "include_global",
+                    "description": { "zh": "可选，默认 false。传 true 时在项目视图里一并列出全局已装包。", "en": "Optional, default false. If true, also lists global packages alongside the project view." },
                     "type": "boolean",
                     "required": false
                 }
@@ -406,6 +484,10 @@ import {
 import * as chen from '../core/chenchui.js';
 import { runBuild } from '../commands/build.js';
 import { runVerify } from '../commands/verify.js';
+import { installLocalTgz } from '../core/localinstall.js';
+import { packProject } from '../core/pack.js';
+import { collectVersions, readOpmSelfVersion } from '../core/version.js';
+import { listGlobalPackages, globalRoot, removeGlobalPackage } from '../core/globalnpm.js';
 
 declare const Tools: any;
 declare const Java: any;
@@ -421,6 +503,21 @@ function fail(message: string, data?: any): any {
 function splitList(s: string): string[] {
     if (!s) return [];
     return String(s).split(/[\s,]+/).map(x => x.trim()).filter(Boolean);
+}
+
+/** 把参数规范成字符串数组（支持真数组 / JSON 字符串数组 / 逗号分隔串） */
+function normStrArray(v: any): string[] {
+    if (v === undefined || v === null) return [];
+    if (Array.isArray(v)) return v.map((x: any) => String(x)).filter((x: string) => !!x.trim());
+    const s = String(v).trim();
+    if (!s) return [];
+    if (s.startsWith('[')) {
+        try {
+            const arr = JSON.parse(s);
+            if (Array.isArray(arr)) return arr.map((x: any) => String(x)).filter((x: string) => !!x.trim());
+        } catch (e) { /* fallthrough */ }
+    }
+    return splitList(s);
 }
 
 // =============== init ===============
@@ -523,9 +620,29 @@ async function doSearch(params: any): Promise<any> {
 
 async function doInstall(params: any): Promise<any> {
     const projectDir: string = params.project_dir;
-    if (!projectDir) return fail('缺少 project_dir');
     const save = params.save !== false;
 
+    // 分支 A：安装本地 tgz
+    const tgzPath: string = params.tgz_path;
+    if (tgzPath) {
+        const isGlobal = params.global === true;
+        if (!isGlobal && !projectDir) return fail('项目安装需提供 project_dir（或传 global=true 装到全局）');
+        try {
+            const rep = await installLocalTgz({
+                tgzPath: tgzPath,
+                projectDir: projectDir,
+                global: isGlobal,
+                save: save && !isGlobal
+            });
+            if (!rep.ok) return fail(rep.message, rep);
+            return ok(rep, rep.message);
+        } catch (e) {
+            return fail(String(e));
+        }
+    }
+
+    // 分支 B：registry 安装
+    if (!projectDir) return fail('缺少 project_dir');
     const specs: string[] = splitList(params.packages || '');
     let pj = await readPackageJson(projectDir);
 
@@ -588,9 +705,24 @@ async function doInstall(params: any): Promise<any> {
 
 async function doRemove(params: any): Promise<any> {
     const projectDir: string = params.project_dir;
-    if (!projectDir) return fail('缺少 project_dir');
     const names = splitList(params.packages || '');
     if (names.length === 0) return fail('缺少 packages');
+
+    // 全局卸载模式
+    if (params.global === true) {
+        const removedG: string[] = [];
+        const notFoundG: string[] = [];
+        for (const name of names) {
+            try {
+                const r = await removeGlobalPackage(name);
+                if (r.ok) removedG.push(name); else notFoundG.push(name);
+            } catch (e) { notFoundG.push(name); }
+        }
+        return ok({ removed: removedG, not_found: notFoundG, mode: 'global' },
+            '全局卸载完成：移除 ' + removedG.length + ' 个（' + globalRoot() + '）');
+    }
+
+    if (!projectDir) return fail('缺少 project_dir（或传 global=true 卸载全局包）');
 
     const removed: string[] = [];
     const notFound: string[] = [];
@@ -630,6 +762,59 @@ async function doRemove(params: any): Promise<any> {
     }
 
     return ok({ removed: removed, not_found: notFound }, '卸载完成：移除 ' + removed.length + ' 个');
+}
+
+// =============== pack ===============
+
+async function doPack(params: any): Promise<any> {
+    const projectDir: string = params.project_dir;
+    if (!projectDir) return fail('缺少 project_dir');
+    try {
+        const rep = await packProject({
+            projectDir: projectDir,
+            outDir: params.out_dir,
+            outName: params.out_name
+        });
+        if (!rep.ok) return fail(rep.message, rep);
+        return ok({ tgz_path: rep.tgzPath, file_count: rep.fileCount, name: rep.name, version: rep.version }, rep.message);
+    } catch (e) {
+        return fail(String(e));
+    }
+}
+
+// =============== version ===============
+
+async function doVersion(params: any): Promise<any> {
+    // 不传 project_dir：默认列 npm 全局安装目录
+    const projectDir: string = params.project_dir;
+    const includeGlobal = params.include_global === true;
+    try {
+        if (!projectDir) {
+            // 纯全局模式：直接列全局已装包 + opm 自身
+            const g = await listGlobalPackages();
+            const globals = g.map((x) => ({ name: x.name, version: x.version, source: 'global', dir: x.dir }));
+            const opm = await readOpmSelfVersion();
+            return ok({
+                self: null,
+                deps: [],
+                globals: globals,
+                opm: opm,
+                mode: 'global',
+                global_root: globalRoot()
+            }, '全局安装目录（' + globalRoot() + '）：' + globals.length + ' 个包' + (opm ? '，opm=' + opm.version : ''));
+        }
+        const rep = await collectVersions(projectDir, includeGlobal);
+        return ok({
+            self: rep.self,
+            deps: rep.deps,
+            globals: rep.globals,
+            opm: rep.opm,
+            project_dir: rep.projectDir,
+            mode: 'project'
+        }, rep.message);
+    } catch (e) {
+        return fail(String(e));
+    }
 }
 
 // =============== manager ===============
@@ -898,7 +1083,8 @@ async function toolBuild(params: any): Promise<void> {
             const rep = await runBuild({
                 projectDir: String(p.project_dir),
                 skipCompile: p.skip_compile === true || p.skip_compile === 'true',
-                outName: p.out_name ? String(p.out_name) : undefined
+                outName: p.out_name ? String(p.out_name) : undefined,
+                extraFiles: normStrArray(p.extra_files)
             } as any);
             // 拼装可读诊断
             let msg = rep.message;
@@ -923,6 +1109,7 @@ async function toolBuild(params: any): Promise<void> {
                     bare_names: rep.bareNames || [],
                     violations: rep.violations || [],
                     missing: rep.missing || [],
+                    extra_files: rep.extraFiles || { added: [], missing: [] },
                     compile_stdout: rep.compileStdout || ''
                 }
             };
@@ -942,7 +1129,8 @@ async function toolVerify(params: any): Promise<void> {
         } else {
             const rep = await runVerify({
                 projectDir: String(p.project_dir),
-                skipCompile: p.skip_compile === true || p.skip_compile === 'true'
+                skipCompile: p.skip_compile === true || p.skip_compile === 'true',
+                extraFiles: normStrArray(p.extra_files)
             } as any);
             let msg = rep.message;
             if (!rep.ok) {
@@ -974,5 +1162,19 @@ async function toolVerify(params: any): Promise<void> {
     complete(r);
 }
 
+async function toolPack(params: any): Promise<void> {
+    let r: any;
+    try { r = await doPack(params || {}); } catch (e) { r = fail('执行失败：' + String((e as any) && (e as any).message ? (e as any).message : e)); }
+    complete(r);
+}
+
+async function toolVersion(params: any): Promise<void> {
+    let r: any;
+    try { r = await doVersion(params || {}); } catch (e) { r = fail('执行失败：' + String((e as any) && (e as any).message ? (e as any).message : e)); }
+    complete(r);
+}
+
 exportsAny.build = toolBuild;
 exportsAny.verify = toolVerify;
+exportsAny.pack = toolPack;
+exportsAny.version = toolVersion;

@@ -55,14 +55,16 @@ function join(a: string, b: string): string {
 /**
  * 定位项目里已安装的 node.operit 目录。
  * 优先 <projectDir>/node_modules/@serveryyswys/node.operit；
- * 若传了显式路径则直接用。
+ * 若项目内没有，则依次在 extraRoots 的 node_modules 下找（用于全局影子目录回退）。
+ * 返回真实磁盘目录（项目内或影子内）。
  */
-export async function locateNodeOperit(projectDir: string): Promise<string | null> {
-    const candidates = [
-        join(projectDir, NODE_OPERIT_DIR),
-        join(projectDir, 'node_modules/@serveryyswys/node.operit')
-    ];
-    for (const c of candidates) {
+export async function locateNodeOperit(projectDir: string, extraRoots?: string[]): Promise<string | null> {
+    const roots: string[] = [projectDir];
+    if (extraRoots && extraRoots.length) {
+        for (const r of extraRoots) if (r && roots.indexOf(r) < 0) roots.push(r);
+    }
+    for (const root of roots) {
+        const c = join(root, NODE_OPERIT_DIR);
         try {
             const ex = await Tools.Files.exists(join(c, 'BUILTINS.json'));
             if (ex && ex.exists) return c;
@@ -73,10 +75,11 @@ export async function locateNodeOperit(projectDir: string): Promise<string | nul
 
 /**
  * 读取并解析契约。projectDir 未安装 node.operit 时抛错。
+ * extraRoots：额外的查找根（全局影子目录），项目内找不到时回退用。
  * 结果按安装目录缓存。
  */
-export async function loadContract(projectDir: string): Promise<NodeOperitContract> {
-    const dir = await locateNodeOperit(projectDir);
+export async function loadContract(projectDir: string, extraRoots?: string[]): Promise<NodeOperitContract> {
+    const dir = await locateNodeOperit(projectDir, extraRoots);
     if (!dir) {
         throw new Error(
             '未找到 node.operit。请先在项目里执行 init / install，' +

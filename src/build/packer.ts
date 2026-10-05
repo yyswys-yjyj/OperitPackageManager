@@ -84,7 +84,9 @@ export async function packToolpkg(opts: PackOptions): Promise<PackResult> {
             message: '压缩失败：' + zipRes.message
         };
     }
-    // 兜底：若 Files.zip 没把顶层目录去掉，用 zip 命令重整一次
+    // 清理组装临时目录（否则项目内残留 .opm_stage）
+    await hidden('rm -rf ' + shq(stage), 30000);
+
     return {
         ok: true,
         toolpkgPath: toolpkgPath,

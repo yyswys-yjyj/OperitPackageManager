@@ -35,7 +35,7 @@ import {
 export interface ArchiveFile {
     /** 重写后的文本内容 */
     text: string;
-    kind: 'entry' | 'local' | 'builtin' | 'npm';
+    kind: 'entry' | 'local' | 'builtin' | 'npm' | 'extra';
 }
 
 export interface ReachabilityResult {
@@ -55,10 +55,15 @@ export interface ReachabilityOptions {
     /** 项目根目录（node_modules 从这里读）；不传则等于 localRoot */
     depsRoot?: string;
     contract: NodeOperitContract;
+    artifactDirRel?: string | null;
     /** 入口文件相对 localRoot 的路径，如 main.js */
     entryRel: string;
-    /** 额外根（归档内路径），会被读取+重写+递归；用于注入 prelude 的 require 目标 */
+    /** 额外根（归档内路径），会被读取+重写+递归；用于注入 prelude 的 require 目标、
+     *  以及 manifest 声明的子包入口 / UI 模块等非 require 链文件 */
     extraEntries?: string[];
+    /** 排除前缀：归档内路径以此开头的一律不进包（如 node_modules/、.opm_build/、.opm_stage/） */
+    excludePrefixes?: string[];
+    depsRoots?: string[];
 }
 
 const DEPS_PREFIX = 'node_modules/';
@@ -74,6 +79,57 @@ function diskPathOf(archivePath: string, localRoot: string, depsRoot: string): s
     const p = normalizePath(archivePath);
     if (p.indexOf(DEPS_PREFIX) === 0) return join(depsRoot, p);
     return join(localRoot, p);
+}
+
+/** 本包内文件：归档路径 -> 磁盘文件（原样 -> 产物目录 -> 逐级剥前导段） */
+async function resolveLocalDisk(
+    archivePath: string,
+    localRoot: string,
+    artifactDirRel?: string | null
+): Promise<string> {
+    const p = normalizePath(archivePath);
+    // ① 原样
+    if (await fileExists(join(localRoot, p))) return join(localRoot, p);
+    if (artifactDirRel) {
+        const ad = join(localRoot, normalizePath(artifactDirRel));
+        // ② 完整路径丢进产物目录
+        if (await fileExists(join(ad, p))) return join(ad, p);
+        // ③ 逐级剥前导段，再丢进产物目录
+        let parts = p.split('/');
+        while (parts.length > 1) {
+            parts = parts.slice(1);
+            const cand = join(ad, parts.join('/'));
+            if (await fileExists(cand)) return cand;
+        }
+    }
+    return join(localRoot, p); // 回退
+}
+
+/**
+ * 多 root 版：node_modules/ 前缀依次在 depsRoots 里找存在的那份；
+ * 都不存在则回退到第一个（让后续报缺失）。
+ */
+async function diskPathOfMulti(
+    archivePath: string,
+    localRoot: string,
+    depsRoots: string[],
+    artifactDirRel?: string | null
+): Promise<string> {
+    const p = normalizePath(archivePath);
+    if (p.indexOf(DEPS_PREFIX) !== 0) {
+        return resolveLocalDisk(p, localRoot, artifactDirRel);
+    }
+    const roots = (depsRoots && depsRoots.length) ? depsRoots : [localRoot];
+    for (const r of roots) {
+        const cand = join(r, p);
+        if (await fileExists(cand)) return cand;
+    }
+    return join(roots[0], p);
+}
+
+/** 判断某 node_modules/<name> 归档路径在某 root 下是否存在 */
+async function npmExistsInRoot(root: string, archivePath: string): Promise<boolean> {
+    return fileExists(join(root, normalizePath(archivePath)));
 }
 
 async function readText(absPath: string): Promise<string | null> {
@@ -102,10 +158,14 @@ async function resolveLocalRequest(
     localRoot: string,
     depsRoot: string,
     fromArchivePath: string,
-    request: string
+    request: string,
+    excludePrefixes: string[],
+    depsRoots?: string[],
+    artifactDirRel?: string | null
 ): Promise<string | null> {
     const baseDir = dirname(fromArchivePath);
     const target = normalizePath(join(baseDir, request));
+    const roots = (depsRoots && depsRoots.length) ? depsRoots : [depsRoot];
 
     // 候选顺序：显式扩展名优先，再补 .js / /index.js / .json
     const candidates: string[] = [];
@@ -120,9 +180,30 @@ async function resolveLocalRequest(
     }
     for (const c of candidates) {
         const c2 = normalizePath(c);
-        if (await fileExists(diskPathOf(c2, localRoot, depsRoot))) return c2;
+        if (isExcluded(c2, excludePrefixes)) continue;
+        // 本包内文件走 localRoot；node_modules 前缀走多 root 阶梯
+        if (c2.indexOf(DEPS_PREFIX) === 0) {
+            for (const r of roots) {
+                if (await fileExists(join(r, c2))) return c2;
+            }
+        } else {
+            if (await fileExists(await resolveLocalDisk(c2, localRoot, artifactDirRel))) return c2;
+        }
     }
     return null;
+}
+
+/** 归档内路径是否命中排除前缀 */
+function isExcluded(archivePath: string, excludePrefixes: string[]): boolean {
+    if (!excludePrefixes || excludePrefixes.length === 0) return false;
+    const p = normalizePath(archivePath);
+    for (const pre of excludePrefixes) {
+        const norm = normalizePath(pre);
+        if (!norm) continue;
+        const withSlash = norm.endsWith('/') ? norm : norm + '/';
+        if (p === norm || p.indexOf(withSlash) === 0) return true;
+    }
+    return false;
 }
 
 /**
@@ -131,8 +212,15 @@ async function resolveLocalRequest(
 export async function collectReachable(opts: ReachabilityOptions): Promise<ReachabilityResult> {
     const localRoot = opts.localRoot;
     const depsRoot = opts.depsRoot || opts.localRoot;
+    // 多查找根：显式 depsRoots 优先，否则单档 [depsRoot]
+    const depsRoots: string[] = (opts.depsRoots && opts.depsRoots.length)
+        ? opts.depsRoots.slice()
+        : [depsRoot];
+    // 确保 depsRoot 本身也在阶梯里（放在首位去重）
+    if (depsRoots.indexOf(depsRoot) < 0) depsRoots.unshift(depsRoot);
     const contract = opts.contract;
     const entry = normalizePath(opts.entryRel);
+    const excludePrefixes = opts.excludePrefixes || [];
 
     const files = new Map<string, ArchiveFile>();
     const bareSet = new Set<string>();
@@ -141,10 +229,10 @@ export async function collectReachable(opts: ReachabilityOptions): Promise<Reach
 
     const queue: string[] = [entry];
     const enqueued = new Set<string>([entry]);
-    // 额外根（prelude 注入的依赖）：也要读取、重写、递归
+    // 额外根（prelude 依赖 / manifest 子包入口 / UI 模块）：也要读取、重写、递归
     for (const extra of (opts.extraEntries || [])) {
         const e = normalizePath(extra);
-        if (e && !enqueued.has(e)) {
+        if (e && !enqueued.has(e) && !isExcluded(e, excludePrefixes)) {
             enqueued.add(e);
             queue.push(e);
         }
@@ -155,7 +243,7 @@ export async function collectReachable(opts: ReachabilityOptions): Promise<Reach
     while (queue.length > 0) {
         const cur = queue.shift() as string;
 
-        const src = await readText(diskPathOf(cur, localRoot, depsRoot));
+        const src = await readText(await diskPathOfMulti(cur, localRoot, depsRoots, opts.artifactDirRel));
         if (src === null) {
             missing.push({ from: '', name: cur, reason: '文件不存在或读取失败' });
             continue;
@@ -171,7 +259,7 @@ export async function collectReachable(opts: ReachabilityOptions): Promise<Reach
 
             // 相对/绝对路径：本包内文件
             if (req.startsWith('.') || req.startsWith('/')) {
-                const localTarget = await resolveLocalRequest(localRoot, depsRoot, cur, req);
+                const localTarget = await resolveLocalRequest(localRoot, depsRoot, cur, req, excludePrefixes, depsRoots, opts.artifactDirRel);
                 if (localTarget) {
                     if (!enqueued.has(localTarget)) {
                         enqueued.add(localTarget);
@@ -196,7 +284,7 @@ export async function collectReachable(opts: ReachabilityOptions): Promise<Reach
             let resolved = bareCache.get(req);
             if (resolved === undefined) {
                 try {
-                    const r = await resolveBareName(depsRoot, contract, req);
+                    const r = await resolveBareName(depsRoot, contract, req, depsRoots);
                     resolved = { archivePath: r.archivePath, kind: r.kind };
                 } catch (e) {
                     const reason = e instanceof ResolveError ? e.message : String(e);

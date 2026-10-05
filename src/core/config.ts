@@ -67,7 +67,6 @@ export async function saveConfig(patch: Partial<OpmConfig>): Promise<OpmConfig> 
     const next = Object.assign({}, cur, patch);
     await Tools.Files.mkdir(CONFIG_DIR, true);
     await Tools.Files.write(CONFIG_PATH, JSON.stringify(next, null, 2));
-    _cache = next;
     return next;
 }
 

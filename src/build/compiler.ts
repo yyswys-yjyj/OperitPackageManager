@@ -62,17 +62,43 @@ export async function compileProject(opts: CompileOptions): Promise<CompileResul
 
     const res = await hidden(cmd, timeoutMs);
     const combined = res.output || '';
-    // tsc 把错误写到 stdout（用 2>&1 合并了）；用退出码判断成败
     const exitCode = typeof res.exitCode === 'number' ? res.exitCode : (res.timedOut ? 124 : 0);
 
+    // tsc 即便有类型错误（如 UI 上下文缺 ctx/Tools 声明这类非致命错误）也常会产出 JS。
+    // 因此判据 = 「输出目录里确实生成了 .js 产物」为主，exitCode 为辅。
+    const produced = await countJsFiles(absOut);
+
     return {
-        ok: exitCode === 0,
+        ok: produced > 0,
         outDir: outDirRel,
-        outputSummary: '',
+        outputSummary: produced + ' js file(s)',
         stdout: combined,
         stderr: '',
         exitCode: exitCode
     };
+}
+
+/** 递归统计目录下 .js 文件数 */
+async function countJsFiles(dir: string): Promise<number> {
+    let n = 0;
+    let listing: any;
+    try {
+        listing = await Tools.Files.list(dir);
+    } catch (e) {
+        return 0;
+    }
+    const entries = (listing && (listing.files || listing.entries || listing.children)) || [];
+    for (const it of entries) {
+        const name = it.name || it.fileName || '';
+        if (!name) continue;
+        const isDir = it.isDirectory === true || it.type === 'directory' || it.directory === true;
+        if (isDir) {
+            n += await countJsFiles(dir.replace(/\/+$/, '') + '/' + name);
+        } else if (/\.(js|mjs|cjs)$/i.test(name)) {
+            n += 1;
+        }
+    }
+    return n;
 }
 
 async function hidden(command: string, timeoutMs: number): Promise<any> {

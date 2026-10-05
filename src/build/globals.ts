@@ -1,12 +1,4 @@
 /**
- * 全局注入：operit 运行时不提供 Node 的 process / Buffer 全局，
- * 而大量 npm 包会在顶层直接用（如 support-color 里 `const {env}=process`）。
- *
- * 契约依据（BUILTINS.json.packing rule 9）：
- *   "把 process 与 Buffer 注入为全局（不能只入口 require）"
- *
- * 做法：生成一段 prelude 代码，拼到「入口脚本」最前面，
- * 从 node.operit 里 require process / buffer 并挂到 globalThis。
  */
 
 export interface GlobalsOptions {
@@ -31,24 +23,26 @@ export const GLOBAL_SHIMS: GlobalShim[] = [
 ];
 
 /**
- * 生成 prelude 代码片段。
- * 生成的代码用「相对入口」的 require 路径，并要求这些模块被可达性收集。
- * 返回 { prelude, injectedPaths } —— injectedPaths 是需要在归档里存在的路径（供调用方入队收集）。
  */
-export function buildGlobalsPrelude(opts: GlobalsOptions): {
+export function buildGlobalsPrelude(opts: GlobalsOptions, needed?: string[]): {
     prelude: string;
     injectedPaths: string[];
 } {
     const injectedPaths: string[] = [];
     const lines: string[] = [];
 
-    lines.push('/* ==== OPM 全局注入（process / Buffer）==== */');
+    const wants = Array.isArray(needed) && needed.length ? needed : [];
+    const shims = GLOBAL_SHIMS.filter(s => wants.indexOf(s.name) >= 0);
+    if (shims.length === 0) {
+        return { prelude: '', injectedPaths };
+    }
+
     lines.push('(function () {');
     lines.push('  var __g = (typeof globalThis !== "undefined") ? globalThis');
     lines.push('        : (typeof global !== "undefined") ? global');
     lines.push('        : this;');
 
-    for (const shim of GLOBAL_SHIMS) {
+    for (const shim of shims) {
         const target = opts.nodeOperitDistArchive + '/' + shim.subpath + '.js';
         injectedPaths.push(target);
         // 相对入口的 require 串

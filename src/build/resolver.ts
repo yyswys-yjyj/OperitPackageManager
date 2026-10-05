@@ -66,8 +66,25 @@ async function readJson(projectDir: string, relPath: string): Promise<any | null
  * 解析 npm 包的入口文件（打包期）。
  * 顺序：exports['.'] / exports['./'] -> exports 字符串 -> main -> index.js
  * 返回相对项目根的归档内路径；找不到返回 null。
+ *
+ * 若传 roots（多查找根），则依次在每个 root 的 node_modules 下找；
+ * 命中哪个 root，返回的 archivePath 仍是统一的 'node_modules/<name>/...'。
  */
 export async function resolveNpmEntry(
+    projectDir: string,
+    pkgName: string,
+    roots?: string[]
+): Promise<string | null> {
+    const searchRoots = (roots && roots.length) ? roots : [projectDir];
+    for (const root of searchRoots) {
+        const hit = await resolveNpmEntryInRoot(root, pkgName);
+        if (hit) return hit;
+    }
+    return null;
+}
+
+/** 在单个 root 的 node_modules 下解析 npm 包入口 */
+async function resolveNpmEntryInRoot(
     projectDir: string,
     pkgName: string
 ): Promise<string | null> {
@@ -133,7 +150,8 @@ export async function resolveNpmEntry(
 export async function resolveBareName(
     projectDir: string,
     contract: NodeOperitContract,
-    name: string
+    name: string,
+    roots?: string[]
 ): Promise<ResolvedBare> {
     const raw = String(name || '').trim();
     if (!raw) throw new ResolveError('空裸名');
@@ -165,7 +183,7 @@ export async function resolveBareName(
     }
 
     // npm 包
-    const npmEntry = await resolveNpmEntry(projectDir, raw);
+    const npmEntry = await resolveNpmEntry(projectDir, raw, roots);
     if (npmEntry) {
         return { archivePath: npmEntry, kind: 'npm', name: raw };
     }
