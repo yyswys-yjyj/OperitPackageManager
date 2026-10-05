@@ -1,0 +1,221 @@
+import * as env from './lib/fs-env';
+import { Buffer } from './buffer';
+import streamModule = require('./stream');
+import type { DirectoryEntry, FileStat } from './lib/fs-driver';
+import type { ReadStreamOptions, WriteStreamOptions } from './lib/fs-types';
+type ReadStreamLike = InstanceType<typeof streamModule.Readable>;
+type WriteStreamLike = InstanceType<typeof streamModule.Writable>;
+declare class Stats {
+    readonly sizeValue: number;
+    readonly modeValue: number;
+    readonly atimeMsValue: number;
+    readonly mtimeMsValue: number;
+    readonly ctimeMsValue: number;
+    readonly birthtimeMsValue: number;
+    readonly fileLike: boolean;
+    readonly directoryLike: boolean;
+    readonly linkLike: boolean;
+    constructor(raw: FileStat);
+    get size(): number;
+    get mode(): number;
+    get atimeMs(): number;
+    get mtimeMs(): number;
+    get ctimeMs(): number;
+    get birthtimeMs(): number;
+    get atime(): Date;
+    get mtime(): Date;
+    get ctime(): Date;
+    get birthtime(): Date;
+    isFile(): boolean;
+    isDirectory(): boolean;
+    isSymbolicLink(): boolean;
+    isBlockDevice(): boolean;
+    isCharacterDevice(): boolean;
+    isFIFO(): boolean;
+    isSocket(): boolean;
+}
+declare class Dirent {
+    readonly name: string;
+    readonly kind: number;
+    constructor(entry: DirectoryEntry);
+    isFile(): boolean;
+    isDirectory(): boolean;
+    isSymbolicLink(): boolean;
+    isBlockDevice(): boolean;
+    isCharacterDevice(): boolean;
+    isFIFO(): boolean;
+    isSocket(): boolean;
+}
+declare function readFileSync(target: unknown, options?: unknown): string | Buffer;
+declare function writeFileSync(target: unknown, data: unknown, options?: unknown): void;
+declare function appendFileSync(target: unknown, data: unknown, options?: unknown): void;
+declare function existsSync(target: unknown): boolean;
+declare function statSync(target: unknown, options?: unknown): Stats | undefined;
+declare function lstatSync(target: unknown, options?: unknown): Stats | undefined;
+declare function readdirSync(target: unknown, options?: unknown): string[] | Dirent[];
+declare function mkdirSync(target: unknown, options?: unknown): string | undefined;
+declare function rmSync(target: unknown, options?: unknown): void;
+declare function unlinkSync(target: unknown): void;
+declare function rmdirSync(target: unknown, options?: unknown): void;
+declare function renameSync(from: unknown, to: unknown): void;
+declare function copyFileSync(from: unknown, to: unknown): void;
+declare function realpathSync(target: unknown): string;
+declare function readlinkSync(target: unknown): string;
+declare function symlinkSync(target: unknown, linkPath: unknown): void;
+declare function chmodSync(target: unknown, mode: unknown): void;
+declare function truncateSync(target: unknown, length?: unknown): void;
+declare function utimesSync(target: unknown, atime: unknown, mtime: unknown): void;
+declare function accessSync(target: unknown): void;
+declare function mkdtempSync(prefix: unknown): string;
+declare function openSync(target: unknown, flags?: unknown, mode?: unknown): number;
+declare function closeSync(descriptor: unknown): void;
+declare function readSync(descriptor: unknown, buffer: unknown, offset?: unknown, length?: unknown, position?: unknown): number;
+declare function writeSync(descriptor: unknown, data: unknown, a?: unknown, b?: unknown, c?: unknown): number;
+declare function fstatSync(descriptor: unknown, options?: unknown): Stats;
+declare function ftruncateSync(descriptor: unknown, length?: unknown): void;
+declare function fsyncSync(descriptor: unknown): void;
+declare function readFile(...args: unknown[]): void;
+declare function writeFile(...args: unknown[]): void;
+declare function appendFile(...args: unknown[]): void;
+declare function stat(...args: unknown[]): void;
+declare function lstat(...args: unknown[]): void;
+declare function readdir(...args: unknown[]): void;
+declare function mkdir(...args: unknown[]): void;
+declare function rm(...args: unknown[]): void;
+declare function unlink(...args: unknown[]): void;
+declare function rmdir(...args: unknown[]): void;
+declare function rename(...args: unknown[]): void;
+declare function copyFile(...args: unknown[]): void;
+declare function realpath(...args: unknown[]): void;
+declare function access(...args: unknown[]): void;
+declare function mkdtemp(...args: unknown[]): void;
+declare function open(...args: unknown[]): void;
+declare function close(...args: unknown[]): void;
+declare function read(...args: unknown[]): void;
+declare function write(...args: unknown[]): void;
+declare function fstat(...args: unknown[]): void;
+declare function ftruncate(...args: unknown[]): void;
+declare function fsync(...args: unknown[]): void;
+/** Node 的 fs.exists 回调只收一个布尔值，是唯一不带 error 的形态。 */
+declare function exists(target: unknown, callback: unknown): void;
+/**
+ * fs.createReadStream。
+ *
+ * 与 Node 的差异（本库的驱动层没有 fd 概念，因此是"按需整块读 + 切片下发"）：
+ *   - 首次 _read 时把整个文件读进内存，之后按 highWaterMark 切片，
+ *     所以内存占用不是流式的；
+ *   - 'open' 事件仍会发，但参数是 null（没有真实 fd）。
+ */
+declare function createReadStream(target: unknown, options?: ReadStreamOptions): ReadStreamLike;
+/**
+ * fs.createWriteStream。
+ *
+ * 驱动层没有 fd，但写入语义可以保持流式：首次写按 flag 决定是否截断，
+ * 之后逐块追加，内存占用与流式一致。
+ */
+declare function createWriteStream(target: unknown, options?: WriteStreamOptions): WriteStreamLike;
+declare const fs: {
+    readFileSync: typeof readFileSync;
+    writeFileSync: typeof writeFileSync;
+    appendFileSync: typeof appendFileSync;
+    existsSync: typeof existsSync;
+    statSync: typeof statSync;
+    lstatSync: typeof lstatSync;
+    readdirSync: typeof readdirSync;
+    mkdirSync: typeof mkdirSync;
+    rmSync: typeof rmSync;
+    unlinkSync: typeof unlinkSync;
+    rmdirSync: typeof rmdirSync;
+    renameSync: typeof renameSync;
+    copyFileSync: typeof copyFileSync;
+    realpathSync: typeof realpathSync;
+    readlinkSync: typeof readlinkSync;
+    symlinkSync: typeof symlinkSync;
+    chmodSync: typeof chmodSync;
+    truncateSync: typeof truncateSync;
+    utimesSync: typeof utimesSync;
+    accessSync: typeof accessSync;
+    mkdtempSync: typeof mkdtempSync;
+    openSync: typeof openSync;
+    closeSync: typeof closeSync;
+    readSync: typeof readSync;
+    writeSync: typeof writeSync;
+    fstatSync: typeof fstatSync;
+    ftruncateSync: typeof ftruncateSync;
+    fsyncSync: typeof fsyncSync;
+    fdatasyncSync: typeof fsyncSync;
+    readFile: typeof readFile;
+    writeFile: typeof writeFile;
+    appendFile: typeof appendFile;
+    stat: typeof stat;
+    lstat: typeof lstat;
+    readdir: typeof readdir;
+    mkdir: typeof mkdir;
+    rm: typeof rm;
+    unlink: typeof unlink;
+    rmdir: typeof rmdir;
+    rename: typeof rename;
+    copyFile: typeof copyFile;
+    realpath: typeof realpath;
+    access: typeof access;
+    mkdtemp: typeof mkdtemp;
+    exists: typeof exists;
+    open: typeof open;
+    close: typeof close;
+    read: typeof read;
+    write: typeof write;
+    fstat: typeof fstat;
+    ftruncate: typeof ftruncate;
+    fsync: typeof fsync;
+    createReadStream: typeof createReadStream;
+    createWriteStream: typeof createWriteStream;
+    Stats: typeof Stats;
+    Dirent: typeof Dirent;
+    constants: {
+        F_OK: number;
+        R_OK: number;
+        W_OK: number;
+        X_OK: number;
+        COPYFILE_EXCL: number;
+        COPYFILE_FICLONE: number;
+        COPYFILE_FICLONE_FORCE: number;
+        UV_FS_COPYFILE_EXCL: number;
+        UV_FS_COPYFILE_FICLONE: number;
+        UV_FS_COPYFILE_FICLONE_FORCE: number;
+        O_RDONLY: number;
+        O_WRONLY: number;
+        O_RDWR: number;
+        O_CREAT: number;
+        O_EXCL: number;
+        O_TRUNC: number;
+        O_APPEND: number;
+        UV_FS_O_FILEMAP: number;
+        UV_FS_SYMLINK_DIR: number;
+        UV_FS_SYMLINK_JUNCTION: number;
+        UV_DIRENT_UNKNOWN: number;
+        UV_DIRENT_FILE: number;
+        UV_DIRENT_DIR: number;
+        UV_DIRENT_LINK: number;
+        UV_DIRENT_FIFO: number;
+        UV_DIRENT_SOCKET: number;
+        UV_DIRENT_CHAR: number;
+        UV_DIRENT_BLOCK: number;
+        S_IFMT: number;
+        S_IFREG: number;
+        S_IFDIR: number;
+        S_IFCHR: number;
+        S_IFIFO: number;
+        S_IFLNK: number;
+        S_IRUSR: number;
+        S_IWUSR: number;
+        S_IXUSR: number;
+        S_IRGRP: number;
+        S_IWGRP: number;
+        S_IXGRP: number;
+        S_IROTH: number;
+        S_IWOTH: number;
+        S_IXOTH: number;
+    };
+    env: typeof env;
+};
+export = fs;

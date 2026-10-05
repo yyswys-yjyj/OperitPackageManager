@@ -1,0 +1,34 @@
+import type { LookupOptions } from '../lib/dns-types';
+declare function lookup(hostname: unknown, options?: number | LookupOptions): Promise<unknown>;
+declare function lookupService(address: unknown, port: unknown): Promise<{
+    hostname: string;
+    service: string;
+}>;
+declare function getServers(): string[];
+declare function setServers(): never;
+declare function getDefaultResultOrder(): string;
+declare function setDefaultResultOrder(order: unknown): void;
+declare const api: {
+    lookup: typeof lookup;
+    lookupService: typeof lookupService;
+    resolve: () => never;
+    resolve4: () => never;
+    resolve6: () => never;
+    resolveAny: () => never;
+    resolveCaa: () => never;
+    resolveCname: () => never;
+    resolveMx: () => never;
+    resolveNaptr: () => never;
+    resolveNs: () => never;
+    resolvePtr: () => never;
+    resolveSoa: () => never;
+    resolveSrv: () => never;
+    resolveTlsa: () => never;
+    resolveTxt: () => never;
+    reverse: () => never;
+    getServers: typeof getServers;
+    setServers: typeof setServers;
+    getDefaultResultOrder: typeof getDefaultResultOrder;
+    setDefaultResultOrder: typeof setDefaultResultOrder;
+};
+export = api;
