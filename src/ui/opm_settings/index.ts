@@ -177,6 +177,21 @@ function Screen(ctx) {
         setStatusOk(true);
     }
 
+    /** 用系统 Intent 跳浏览器打开资源中心 */
+    async function handleOpenCenter() {
+        const url = 'https://www.serveryyswys.top/download';
+        try {
+            const r = await Tools.System.intent({
+                action: 'android.intent.action.VIEW',
+                uri: url,
+                type: 'activity'
+            });
+            if (ctx.showToast) await ctx.showToast('已跳转资源中心');
+        } catch (e) {
+            if (ctx.showToast) await ctx.showToast('跳转失败：' + String((e && e.message) ? e.message : e));
+        }
+    }
+
     const items = [];
 
     // ---- 顶部标题 ----
@@ -250,6 +265,32 @@ function Screen(ctx) {
     }));
     items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth() }, [
         ctx.UI.Column({ padding: 16 }, apiKids)
+    ]));
+    items.push(ctx.UI.Spacer({ height: 12 }));
+
+    // ---- 资源中心卡片 ----
+    const centerKids = [];
+    centerKids.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
+        ctx.UI.Icon({ name: 'storefront', size: 18, tint: cs.primary }),
+        ctx.UI.Spacer({ width: 6 }),
+        ctx.UI.Text({ text: '资源中心', fontSize: 16, fontWeight: 'bold' })
+    ]));
+    centerKids.push(ctx.UI.Spacer({ height: 4 }));
+    centerKids.push(ctx.UI.Text({ text: '辰锤下载中心：浏览 / 搜索已投稿的软件包与 npm 包', fontSize: 11, color: cs.onSurfaceVariant }));
+    centerKids.push(ctx.UI.Spacer({ height: 12 }));
+    centerKids.push(ctx.UI.Button({
+        onClick: handleOpenCenter,
+        containerColor: cs.primary,
+        contentColor: cs.onPrimary,
+        modifier: ctx.Modifier.fillMaxWidth(),
+        content: ctx.UI.Row({ verticalAlignment: 'center' }, [
+            ctx.UI.Icon({ name: 'open_in_new', size: 18, tint: cs.onPrimary }),
+            ctx.UI.Spacer({ width: 6 }),
+            ctx.UI.Text({ text: '打开资源中心（浏览器）', color: cs.onPrimary, fontWeight: 'bold' })
+        ])
+    }));
+    items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth() }, [
+        ctx.UI.Column({ padding: 16 }, centerKids)
     ]));
     items.push(ctx.UI.Spacer({ height: 12 }));
 

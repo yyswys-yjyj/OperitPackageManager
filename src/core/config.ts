@@ -27,8 +27,6 @@ export const DEFAULT_RUNTIME_PACKAGE = '@serveryyswys/node.operit';
 const CONFIG_DIR = '/sdcard/Download/Operit/plugins/com.operit.serveryyswys.opm';
 const CONFIG_PATH = CONFIG_DIR + '/opm.config.json';
 
-let _cache: OpmConfig | null = null;
-
 export function defaultConfig(): OpmConfig {
     return {
         registry: DEFAULT_REGISTRY,
@@ -41,23 +39,26 @@ export function defaultConfig(): OpmConfig {
     };
 }
 
-/** 读取配置；不存在则返回默认值（不落盘） */
-export async function loadConfig(force?: boolean): Promise<OpmConfig> {
-    if (_cache && !force) return _cache;
+/**
+ * 读取配置；不存在则返回默认值（不落盘）。
+ *
+ * 注意：这里**不缓存**。ToolPkg 模块在宿主进程内只加载一次，
+ * 若用模块级缓存，用户"先调用后配 token"会导致缓存固化为空 token，
+ * 之后所有调用都读不到 token。配置文件很小，每次读文件即可。
+ */
+export async function loadConfig(_force?: boolean): Promise<OpmConfig> {
     const base = defaultConfig();
     try {
         const exists = await Tools.Files.exists(CONFIG_PATH);
         if (exists && exists.exists) {
             const r = await Tools.Files.read(CONFIG_PATH);
             const parsed = JSON.parse(r.content);
-            _cache = Object.assign(base, parsed);
-            return _cache;
+            return Object.assign(base, parsed);
         }
     } catch (e) {
         // 配置损坏时回退默认
     }
-    _cache = base;
-    return _cache;
+    return base;
 }
 
 /** 写入配置（合并） */

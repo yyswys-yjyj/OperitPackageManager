@@ -108,43 +108,235 @@ METADATA
         {
             "name": "manager",
             "description": {
-                "zh": "管理你自己发布的包（需配置辰锤 API token）。action 支持：list（列出我的软件包）、info（查看包详情/npm 信息）、publish（同步到市场）、create-npm（新建 npm 包）。",
-                "en": "Manage your own published packages (requires Chenchui API token). Actions: list, info, publish, create-npm."
+                "zh": "【做什么】辰锤资源中心（resource_center）投稿客户端：管理你账号下已发布的软件包——查询、建包、传代码文件、归档审查、写文档/缩略图、建 npm 包、同步到市场。\n\n【前置条件】需先在 opm 设置界面填入『辰锤 API token』。该 API Key 必须在开放平台勾选 resource_center 作用域，否则所有调用返回 403『Permission denied for this API』。\n\n【术语】软件包（package，用 package_id/id 定位）→ 内含 普通包（subpack）或 npm 包（npm）→ 包内含文件。一个软件包最多 1 个 npm 包、最多 1 份文档、最多 12 张缩略图。\n\n【action 对照表（共 32 个，想做 X 就用对应 action）】\n· 读/查询（GET 桶 30 次/分）\n  - packages：列出我的软件包。可选 status(逗号分隔 draft/reviewing/pending/approved/rejected)、limit(≤200)、offset。\n  - package：单个软件包全貌（含 subpacks/npm/docs/images/limits）。← 别名 info 会额外带 npm 概览\n  - subpacks：某软件包下的普通包列表\n  - subpack：单个普通包（含文件），需 id\n  - files：包内文件列表，需 kind(subpack/npm) + id\n  - docs：文档列表 / doc：取回文档正文（用 asset_id，或 package_id+doc_name）\n  - images：缩略图列表（走 get 桶）\n  - npm：npm 包详情（无则 data.npm 为 null）/ npm_files：npm 包内文件清单（按入口优先级排序），需 id\n  - review：审查/审核状态，含 package_ready（发布条件检查），需 kind + id\n· 写（POST 桶 20 次/分）\n  - package_create：新建软件包，需 package_id（仅字母数字与 . _ -，≥2 字符，创建后不可改）+ 可选 package_name(≤80)/desc(≤300)/tag(≤60)/enable\n  - package_update：改名/描述/标签/启用，需 package_id 或 id + 至少一个新值\n  - package_delete：删除软件包及其全部内容（不可恢复，已上架会先下架）\n  - subpack_create：新建普通包，需 key（包内唯一，如 main）+ 可选 file_name（服务端补 .zip）→ 拿返回 id\n  - subpack_delete / subpack_iterate：删 / 退回归档状态以便改文件（保留 key 与归档名），需 id\n  - file_upload：上传包内文件，需 kind + id + file_path（本地路径）+ 可选 entry（包内相对路径，同名覆盖）。限制：单文件默认 2MB、单包默认 50 个、仅代码/文本、entry 不许 .. 与绝对路径\n  - file_delete：删包内文件，需 kind + id + file_id（需包为 draft/rejected）\n  - archive：归档并触发审查，需 kind + id\n  - review_step：前台推进审查（兜底，正常不用；勿当轮询）\n  - doc_save：在线保存文档，需 package_id 或 id + doc_name(扩展名 .md) + content(≤512KB)\n  - asset_upload：上传缩略图/文档，需 asset_kind(image/doc) + package_id + file_path（image 限 5MB、png/jpg/jpeg/gif/webp/avif；doc 限 2MB、md/markdown/txt）\n  - asset_delete：删资产，需 asset_kind + asset_id 或 package_id+doc_name/image_name\n  - npm_create：建归档式 npm 包，需 package_id 或 id + npm_name（可含 @scope）+ 可选 npm_version/npm_main/npm_bin/npm_type(module|commonjs)/npm_license/npm_desc/npm_keywords/npm_deps/npm_peer_deps/npm_engines/npm_files/npm_types/npm_scope/npm_component。⚠ 不填 npm_bin 时 npx 跑不起来\n  - npm_declare：建声明式 npm 包（指向已归档的普通包，不重打包），需 package_id 或 id + src_subpack(已归档普通包 ID) + npm_name 等\n  - npm_update：改 npm 元数据，需 id + 任意 npm_* 字段 / npm_delete：删 npm 包，需 id\n  - publish：同步到市场，需 package_id 或 id（必须全部过审，否则报差哪些）/ unpublish：从市场下架\n· 下载\n  - download：下载归档产物（subpack→.zip / npm→.tgz），需 kind + id + save_path（本地保存路径）。限 file_dl 桶 3 次/分\n  - image：下载缩略图本体，需 asset_id 或 package_id+image_name + save_path。限 image_dl 桶 1 次/分\n\n【典型链路】首次投稿：package_create → subpack_create(拿 id) → file_upload 逐个传 → archive → review 轮询直到 approved → doc_save/asset_upload 补文档缩略图 → publish。\n 更新包体：subpack_iterate → file_upload → archive → review → publish。\n 发 npm 包：package_create → npm_create(拿 id) → file_upload(kind=npm) → npm_update 补 npm_main → archive → review → publish。\n\n【状态机】draft 编辑中（可改文件）→ reviewing 归档中(AI 审查) → pending 待审核 / approved 已通过（可 publish）/ rejected 已驳回（看 package.admin_reply，改完重归档）。注意：『软件包整体』也是一个发布条件。\n\n【错误速查】401 缺/错 token；403 未勾作用域或操作他人资源；404 定位参数没给全/包不存在/还没归档就下载；429 触发限流，按 retry_after 秒退避（读 30/分、写 20/分、下载 3/分、图 1/分）；400 业务失败（如『该包已归档』需先 subpack_iterate）。",
+                "en": "WHAT: Chenchui resource-center (resource_center) submission client — manage packages under your account: query, create packages, upload code files, archive/review, save docs/thumbnails, create npm packages, publish to market.\n\nPREREQUISITE: fill in the Chenchui API token in opm settings. The API Key must have the resource_center scope enabled, otherwise every call returns 403 'Permission denied for this API'.\n\nTERMS: software package (locate by package_id/id) -> contains subpack(s) or npm package -> contains files. Per software package: at most 1 npm package, 1 doc, 12 thumbnails.\n\nACTION REFERENCE (32 total; pick the matching one):\n· Read (GET bucket, 30/min)\n  packages (list mine; optional status/limit/offset), package (full detail; alias info adds npm overview), subpacks, subpack (needs id), files (needs kind+id), docs, doc (asset_id or package_id+doc_name), images, npm (data.npm null if none), npm_files (needs id), review (has package_ready; needs kind+id)\n· Write (POST bucket, 20/min)\n  package_create (needs package_id: [A-Za-z0-9._-], >=2 chars, immutable; optional package_name<=80/desc<=300/tag<=60/enable), package_update (package_id|id + at least one new value), package_delete (irreversible), subpack_create (needs key; optional file_name; returns id), subpack_delete, subpack_iterate (reopen for edits, keeps key & file name), file_upload (kind+id+file_path, optional entry; limits: 2MB/file, 50 files, code/text only, no .. or abs paths), file_delete (kind+id+file_id; only draft/rejected), archive (kind+id), review_step (fallback, not a poll), doc_save (package_id|id + doc_name(.md) + content<=512KB), asset_upload (asset_kind image|doc + package_id + file_path; image<=5MB png/jpg/jpeg/gif/webp/avif, doc<=2MB md/markdown/txt), asset_delete (asset_kind + asset_id or package_id+doc_name/image_name), npm_create (package_id|id + npm_name(+optional npm_version/npm_main/npm_bin/npm_type/npm_license/npm_desc/npm_keywords/npm_deps/npm_peer_deps/npm_engines/npm_files/npm_types/npm_scope/npm_component); WARNING: without npm_bin, npx won't work), npm_declare (package_id|id + src_subpack(archived subpack id) + npm_name...), npm_update (id + any npm_* field), npm_delete (id), publish (package_id|id; requires all approved), unpublish\n· Download\n  download (kind+id+save_path; subpack->.zip, npm->.tgz; file_dl 3/min), image (asset_id or package_id+image_name + save_path; image_dl 1/min)\n\nTYPICAL FLOWS: first submission = package_create -> subpack_create -> file_upload -> archive -> poll review until approved -> doc_save/asset_upload -> publish. Update package = subpack_iterate -> file_upload -> archive -> review -> publish. Publish npm = package_create -> npm_create -> file_upload(kind=npm) -> npm_update(npm_main) -> archive -> review -> publish.\n\nSTATE MACHINE: draft (editable) -> reviewing (AI review) -> pending / approved (can publish) / rejected (check package.admin_reply, re-archive after fixing). Note: the software package itself is also a publish condition.\n\nERRORS: 401 missing/invalid token; 403 missing scope or not your resource; 404 incomplete locator / not found / not archived yet; 429 rate limited, back off retry_after seconds (read 30/min, write 20/min, download 3/min, image 1/min); 400 business failure (e.g. 'package already archived' -> call subpack_iterate first)."
             },
             "parameters": [
                 {
                     "name": "action",
-                    "description": { "zh": "操作：list / info / publish / create-npm", "en": "Action: list / info / publish / create-npm" },
+                    "description": { "zh": "操作名（见工具描述 action 对照表）。读：packages/package/subpacks/subpack/files/docs/doc/images/npm/npm_files/review；写：package_create/package_update/package_delete/subpack_create/subpack_delete/subpack_iterate/file_upload/file_delete/archive/review_step/doc_save/asset_upload/asset_delete/npm_create/npm_declare/npm_update/npm_delete/publish/unpublish；下载：download/image。另支持语义别名 list(≈packages)/info(≈package+npm)。", "en": "Action name (see description). Aliases: list (~packages), info (~package+npm)." },
                     "type": "string",
                     "required": true
                 },
                 {
                     "name": "package_id",
-                    "description": { "zh": "软件包 PackageID（info/publish/create-npm 用）", "en": "Software package PackageID" },
+                    "description": { "zh": "软件包 PackageID（定位用；与 id 二选一，id 优先）", "en": "Software package PackageID (locator; id takes priority)" },
                     "type": "string",
                     "required": false
                 },
                 {
                     "name": "id",
-                    "description": { "zh": "软件包数字 ID（可选，优先于 package_id）", "en": "Numeric package id (optional)" },
+                    "description": { "zh": "包/软件包的数字 ID（软件包定位时优先于 package_id；subpack/files/npm/archive/download 等则直接指向包 ID）", "en": "Numeric id of package/subpackage" },
                     "type": "number",
                     "required": false
                 },
                 {
-                    "name": "npm_name",
-                    "description": { "zh": "npm 包名（create-npm 用），可含 @scope", "en": "npm package name (create-npm)" },
-                    "type": "string",
-                    "required": false
-                },
-                {
-                    "name": "npm_version",
-                    "description": { "zh": "npm 版本（create-npm 用）", "en": "npm version (create-npm)" },
+                    "name": "kind",
+                    "description": { "zh": "包类型：subpack（普通包，默认）/ npm。files/file_upload/file_delete/archive/review/download 用", "en": "Package kind: subpack (default) / npm" },
                     "type": "string",
                     "required": false
                 },
                 {
                     "name": "status",
-                    "description": { "zh": "list 的状态过滤：draft/reviewing/pending/approved/unsupported/rejected", "en": "Status filter for list" },
+                    "description": { "zh": "packages 的状态过滤，多值逗号分隔：draft/reviewing/pending/approved/rejected", "en": "Status filter for packages (comma-separated)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "limit",
+                    "description": { "zh": "packages 分页条数（默认 50，上限 200）", "en": "Page size for packages (default 50, max 200)" },
+                    "type": "number",
+                    "required": false
+                },
+                {
+                    "name": "offset",
+                    "description": { "zh": "packages 分页偏移（默认 0）", "en": "Offset for packages (default 0)" },
+                    "type": "number",
+                    "required": false
+                },
+                {
+                    "name": "package_name",
+                    "description": { "zh": "软件包显示名（package_create/package_update 用，≤80 字符）", "en": "Package display name (<=80 chars)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "desc",
+                    "description": { "zh": "软件包描述（package_create/package_update 用，≤300 字符）", "en": "Package description (<=300 chars)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "tag",
+                    "description": { "zh": "软件包标签（package_create/package_update 用，≤60 字符）", "en": "Package tag (<=60 chars)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "enable",
+                    "description": { "zh": "是否启用（package_create/package_update 用）", "en": "Enable flag" },
+                    "type": "boolean",
+                    "required": false
+                },
+                {
+                    "name": "key",
+                    "description": { "zh": "普通包组件键（subpack_create 必填，包内唯一，如 main）", "en": "Subpack component key (unique, e.g. main)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "file_name",
+                    "description": { "zh": "普通包归档名主体（subpack_create 用，扩展名服务端补 .zip）", "en": "Subpack archive base name" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "file_path",
+                    "description": { "zh": "要上传的本地文件绝对路径（file_upload/asset_upload 用）", "en": "Local absolute file path to upload" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "entry",
+                    "description": { "zh": "包内相对路径（file_upload 用，如 src/util.js；同名覆盖；不许 .. 或绝对路径）", "en": "In-package relative path (file_upload)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "file_id",
+                    "description": { "zh": "包内文件 ID（file_delete 用，取自 files 返回的 items[].id）", "en": "File id (file_delete)" },
+                    "type": "number",
+                    "required": false
+                },
+                {
+                    "name": "doc_name",
+                    "description": { "zh": "文档发布名（doc_save/doc/asset_delete 用，扩展名固定 .md）", "en": "Doc publish name (.md)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "content",
+                    "description": { "zh": "文档正文（doc_save 用，UTF-8，≤512KB）", "en": "Doc content (<=512KB)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "asset_kind",
+                    "description": { "zh": "资产类型：image（缩略图，默认）/ doc（文档）。asset_upload/asset_delete 用", "en": "Asset kind: image (default) / doc" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "asset_id",
+                    "description": { "zh": "资产 ID（doc/image/asset_delete/doc_save 改写时用；给了它就不用给软件包定位）", "en": "Asset id" },
+                    "type": "number",
+                    "required": false
+                },
+                {
+                    "name": "image_name",
+                    "description": { "zh": "缩略图发布名（image/asset_delete 用，如 logo.png）", "en": "Image publish name" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "src_subpack",
+                    "description": { "zh": "源普通包 ID（npm_declare 用，必须已归档）", "en": "Source subpack id (npm_declare, must be archived)" },
+                    "type": "number",
+                    "required": false
+                },
+                {
+                    "name": "save_path",
+                    "description": { "zh": "下载保存到的本地绝对路径（download/image 用）", "en": "Local absolute save path (download/image)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_name",
+                    "description": { "zh": "npm 包名（npm_create/npm_declare 必填，可含 @scope/pkg，作用域会自动拆出）", "en": "npm package name (can include @scope)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_version",
+                    "description": { "zh": "npm 版本（默认 1.0.0）", "en": "npm version (default 1.0.0)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_main",
+                    "description": { "zh": "npm 入口文件（包内相对路径）", "en": "npm main entry (relative path)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_bin",
+                    "description": { "zh": "npm 可执行入口（不填它 npx 跑不起来）", "en": "npm bin (needed for npx)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_type",
+                    "description": { "zh": "npm 模块类型：module（import）/ commonjs（require）", "en": "npm module type: module / commonjs" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_license",
+                    "description": { "zh": "npm 许可证 SPDX 标识（如 MIT；专有写 UNLICENSED）", "en": "npm SPDX license (e.g. MIT; UNLICENSED)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_desc",
+                    "description": { "zh": "npm 描述", "en": "npm description" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_keywords",
+                    "description": { "zh": "npm 关键词（逗号/空格分隔，或 JSON 数组串）", "en": "npm keywords" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_deps",
+                    "description": { "zh": "npm 依赖（JSON 对象串或 包名@版本 分隔串）", "en": "npm dependencies" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_peer_deps",
+                    "description": { "zh": "npm peer 依赖（格式同 npm_deps）", "en": "npm peerDependencies" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_engines",
+                    "description": { "zh": "npm 运行环境（如 node@>=18）", "en": "npm engines" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_files",
+                    "description": { "zh": "npm 发布白名单（如 dist, index.js）", "en": "npm files whitelist" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_types",
+                    "description": { "zh": "npm 的 .d.ts 声明位置", "en": "npm types (.d.ts) path" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_scope",
+                    "description": { "zh": "npm 作用域名（不带 @；通常从 npm_name 自动拆出）", "en": "npm scope (without @)" },
+                    "type": "string",
+                    "required": false
+                },
+                {
+                    "name": "npm_component",
+                    "description": { "zh": "npm 关联的组件键", "en": "npm associated component key" },
                     "type": "string",
                     "required": false
                 }
@@ -442,52 +634,216 @@ async function doRemove(params: any): Promise<any> {
 
 // =============== manager ===============
 
+/**
+ * manager：辰锤资源中心（resource_center）投稿客户端。
+ * action 直接沿用辰锤原生 action 名（见 METADATA 对照表），另保留 list/info 语义别名。
+ */
 async function doManager(params: any): Promise<any> {
     const action = (params.action || '').trim();
     if (!action) return fail('缺少 action');
+
+    // 通用定位参数
     const locator: any = {};
-    if (params.id !== undefined && params.id !== null) locator.id = params.id;
-    if (params.package_id) locator.package_id = params.package_id;
+    if (params.id !== undefined && params.id !== null) locator.id = Number(params.id);
+    if (params.package_id) locator.package_id = String(params.package_id);
+
+    const kind = params.kind ? String(params.kind) : 'subpack';
+    const pkgId: string | undefined = params.package_id ? String(params.package_id) : undefined;
+
+    const hasLoc = () => Object.keys(locator).length > 0;
+    const needPkg = (name: string) => {
+        if (!hasLoc()) throw new Error(name + ' 需要 package_id 或 id');
+    };
+    const needId = (name: string) => {
+        if (params.id === undefined || params.id === null) throw new Error(name + ' 需要 id');
+    };
 
     try {
-        if (action === 'list') {
-            const r = await chen.listPackages(params.status);
-            return wrapChen(r);
+        // ---------- 读：软件包 ----------
+        if (action === 'list' || action === 'packages') {
+            return wrapChen(await chen.listPackages({
+                status: params.status ? String(params.status) : undefined,
+                limit: params.limit !== undefined ? Number(params.limit) : undefined,
+                offset: params.offset !== undefined ? Number(params.offset) : undefined
+            }));
         }
-        if (action === 'info') {
-            if (Object.keys(locator).length === 0) return fail('info 需要 package_id 或 id');
+        if (action === 'info' || action === 'package') {
+            needPkg('package');
             const pkg = await chen.getPackage(locator);
-            const npm = await chen.getNpm(locator);
-            return ok({ package: pkg.data, npm: npm.data }, '查询完成');
+            // info 语义别名：顺带带上 npm 概览
+            if (action === 'info') {
+                const npm = await chen.getNpm(locator);
+                return ok({ package: pkg.data, npm: npm.data }, '查询完成');
+            }
+            return wrapChen(pkg);
         }
-        if (action === 'publish') {
-            if (Object.keys(locator).length === 0) return fail('publish 需要 package_id 或 id');
-            const r = await chen.publish(locator);
-            return wrapChen(r);
+
+        // ---------- 读：普通包与文件 ----------
+        if (action === 'subpacks') { needPkg('subpacks'); return wrapChen(await chen.listSubpacks(locator)); }
+        if (action === 'subpack') { needId('subpack'); return wrapChen(await chen.getSubpack(Number(params.id))); }
+        if (action === 'files') { needId('files'); return wrapChen(await chen.listFiles(kind, Number(params.id))); }
+
+        // ---------- 读：文档与缩略图 ----------
+        if (action === 'docs') { needPkg('docs'); return wrapChen(await chen.listDocs(locator)); }
+        if (action === 'doc') {
+            return wrapChen(await chen.getDoc({
+                asset_id: params.asset_id !== undefined ? Number(params.asset_id) : undefined,
+                id: locator.id, package_id: locator.package_id,
+                doc_name: params.doc_name ? String(params.doc_name) : undefined
+            }));
         }
-        if (action === 'create-npm') {
-            if (Object.keys(locator).length === 0) return fail('create-npm 需要 package_id 或 id');
-            if (!params.npm_name) return fail('create-npm 需要 npm_name');
-            const meta: any = { npm_name: params.npm_name };
-            if (params.npm_version) meta.npm_version = params.npm_version;
-            const r = await chen.createNpmPackage(locator, meta);
-            return wrapChen(r);
+        if (action === 'images') { needPkg('images'); return wrapChen(await chen.listImages(locator)); }
+
+        // ---------- 读：npm 与审查 ----------
+        if (action === 'npm') { needPkg('npm'); return wrapChen(await chen.getNpm(locator)); }
+        if (action === 'npm_files') { needId('npm_files'); return wrapChen(await chen.getNpmFiles(Number(params.id))); }
+        if (action === 'review') { needId('review'); return wrapChen(await chen.getReview(kind, Number(params.id))); }
+
+        // ---------- 写：软件包 ----------
+        if (action === 'package_create') {
+            if (!params.package_id) return fail('package_create 需要 package_id');
+            return wrapChen(await chen.createPackage({
+                package_id: String(params.package_id),
+                package_name: params.package_name ? String(params.package_name) : undefined,
+                desc: params.desc ? String(params.desc) : undefined,
+                tag: params.tag ? String(params.tag) : undefined,
+                enable: params.enable !== undefined ? !!params.enable : undefined
+            }));
         }
-        return fail('未知 action: ' + action);
+        if (action === 'package_update') {
+            needPkg('package_update');
+            return wrapChen(await chen.updatePackage(locator, {
+                package_name: params.package_name !== undefined ? String(params.package_name) : undefined,
+                desc: params.desc !== undefined ? String(params.desc) : undefined,
+                tag: params.tag !== undefined ? String(params.tag) : undefined,
+                enable: params.enable !== undefined ? !!params.enable : undefined
+            }));
+        }
+        if (action === 'package_delete') { needPkg('package_delete'); return wrapChen(await chen.deletePackage(locator)); }
+
+        // ---------- 写：普通包 ----------
+        if (action === 'subpack_create') {
+            needPkg('subpack_create');
+            if (!params.key) return fail('subpack_create 需要 key');
+            return wrapChen(await chen.createSubpack(locator, String(params.key), params.file_name ? String(params.file_name) : undefined));
+        }
+        if (action === 'subpack_delete') { needId('subpack_delete'); return wrapChen(await chen.deleteSubpack(Number(params.id))); }
+        if (action === 'subpack_iterate') { needId('subpack_iterate'); return wrapChen(await chen.iterateSubpack(Number(params.id))); }
+
+        // ---------- 写：包内文件 ----------
+        if (action === 'file_upload') {
+            needId('file_upload');
+            if (!params.file_path) return fail('file_upload 需要 file_path（本地文件路径）');
+            return wrapChen(await chen.uploadFile(kind, Number(params.id), String(params.file_path), params.entry ? String(params.entry) : undefined));
+        }
+        if (action === 'file_delete') {
+            needId('file_delete');
+            if (params.file_id === undefined) return fail('file_delete 需要 file_id');
+            return wrapChen(await chen.deleteFile(kind, Number(params.id), Number(params.file_id)));
+        }
+
+        // ---------- 写：归档审查 ----------
+        if (action === 'archive') { needId('archive'); return wrapChen(await chen.archive(kind, Number(params.id))); }
+        if (action === 'review_step') { needId('review_step'); return wrapChen(await chen.reviewStep(kind, Number(params.id))); }
+
+        // ---------- 写：文档与缩略图 ----------
+        if (action === 'doc_save') {
+            needPkg('doc_save');
+            if (!params.doc_name) return fail('doc_save 需要 doc_name');
+            if (params.content === undefined) return fail('doc_save 需要 content');
+            return wrapChen(await chen.saveDoc(locator, String(params.doc_name), String(params.content),
+                params.asset_id !== undefined ? Number(params.asset_id) : undefined));
+        }
+        if (action === 'asset_upload') {
+            if (!pkgId) return fail('asset_upload 需要 package_id');
+            if (!params.file_path) return fail('asset_upload 需要 file_path（本地文件路径）');
+            return wrapChen(await chen.uploadAsset(
+                params.asset_kind ? String(params.asset_kind) : 'image', pkgId, String(params.file_path)));
+        }
+        if (action === 'asset_delete') {
+            return wrapChen(await chen.deleteAsset(
+                params.asset_kind ? String(params.asset_kind) : 'image', {
+                asset_id: params.asset_id !== undefined ? Number(params.asset_id) : undefined,
+                id: locator.id, package_id: locator.package_id,
+                doc_name: params.doc_name ? String(params.doc_name) : undefined,
+                image_name: params.image_name ? String(params.image_name) : undefined
+            }));
+        }
+
+        // ---------- 写：npm ----------
+        if (action === 'npm_create') {
+            needPkg('npm_create');
+            if (!params.npm_name) return fail('npm_create 需要 npm_name');
+            return wrapChen(await chen.createNpm(locator, npmMetaFrom(params)));
+        }
+        if (action === 'npm_declare') {
+            needPkg('npm_declare');
+            if (params.src_subpack === undefined) return fail('npm_declare 需要 src_subpack（已归档普通包 ID）');
+            if (!params.npm_name) return fail('npm_declare 需要 npm_name');
+            return wrapChen(await chen.declareNpm(locator, Number(params.src_subpack), npmMetaFrom(params)));
+        }
+        if (action === 'npm_update') {
+            needId('npm_update');
+            return wrapChen(await chen.updateNpm(Number(params.id), npmMetaFrom(params)));
+        }
+        if (action === 'npm_delete') { needId('npm_delete'); return wrapChen(await chen.deleteNpm(Number(params.id))); }
+
+        // ---------- 写：同步 ----------
+        if (action === 'publish') { needPkg('publish'); return wrapChen(await chen.publish(locator)); }
+        if (action === 'unpublish') { needPkg('unpublish'); return wrapChen(await chen.unpublish(locator)); }
+
+        // ---------- 下载 ----------
+        if (action === 'download') {
+            needId('download');
+            if (!params.save_path) return fail('download 需要 save_path（本地保存路径）');
+            return wrapChen(await chen.downloadArtifact(kind, Number(params.id), String(params.save_path)));
+        }
+        if (action === 'image') {
+            if (!params.save_path) return fail('image 需要 save_path（本地保存路径）');
+            return wrapChen(await chen.downloadImage({
+                asset_id: params.asset_id !== undefined ? Number(params.asset_id) : undefined,
+                id: locator.id, package_id: locator.package_id,
+                image_name: params.image_name ? String(params.image_name) : undefined
+            }, String(params.save_path)));
+        }
+
+        return fail('未知 action: ' + action + '（可用值见工具描述里的 action 对照表）');
     } catch (e) {
-        return fail('manager 执行失败：' + String(e));
+        // 不翻译、不加工：原样透出错误信息 + 原始错误对象
+        const err: any = e || {};
+        const raw = (err && err.message) ? err.message : String(err);
+        return fail(raw, {
+            error_name: err && err.name,
+            error_message: err && err.message,
+            stack: err && err.stack ? String(err.stack).slice(0, 800) : undefined
+        });
     }
 }
 
+/** 从 params 抽取 npm_ 开头的元数据字段 */
+function npmMetaFrom(params: any): chen.NpmMeta {
+    const keys = ['npm_name', 'npm_scope', 'npm_version', 'npm_main', 'npm_bin', 'npm_types',
+        'npm_type', 'npm_license', 'npm_desc', 'npm_keywords', 'npm_deps', 'npm_peer_deps',
+        'npm_engines', 'npm_files', 'npm_component'];
+    const meta: any = {};
+    for (const k of keys) {
+        if (params[k] !== undefined && params[k] !== null && params[k] !== '') meta[k] = String(params[k]);
+    }
+    return meta;
+}
+
+/**
+ * 辰锤响应 → 统一返回。不做翻译、不做加工：
+ * 成功时把 data 原样返回；失败时把原始 error + 完整原始响应体透出。
+ */
 function wrapChen(r: chen.ChenchuiResult): any {
     if (r.success) {
         return ok(r.data !== undefined ? r.data : r, 'ok');
     }
-    let msg = r.error || '请求失败';
-    if (r.code === 429 && r.retry_after) {
-        msg += '（限流，请 ' + r.retry_after + ' 秒后重试）';
-    }
-    return fail(msg, r);
+    // 原始 error 优先，没有就把整个响应当 message
+    const rawMsg = r.error !== undefined ? String(r.error) : JSON.stringify(r);
+    // data 里塞完整原始响应，方便排查
+    return fail(rawMsg, r);
 }
 
 // =============== 导出 ===============
