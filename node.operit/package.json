@@ -1,0 +1,31 @@
+{
+  "name": "@serveryyswys/node.operit",
+  "version": "0.1.2",
+  "description": "为 Operit 的 CommonJS 运行时补齐 Node 核心能力（fs / path / os / buffer / ...）",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "operit",
+    "quickjs",
+    "node-compat",
+    "commonjs",
+    "polyfill",
+    "android",
+    "shim"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json",
+    "./BUILTINS.json": "./BUILTINS.json",
+    "./dist/*": "./dist/*",
+    "./*": "./dist/*.js"
+  },
+  "files": [
+    "dist/",
+    "BUILTINS.json",
+    "README.md",
+    "DESIGN.md",
+    "LICENSE*"
+  ]
+}

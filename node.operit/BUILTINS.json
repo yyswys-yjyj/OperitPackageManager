@@ -1,0 +1,233 @@
+{
+  "schema": 1,
+  "package": "@serveryyswys/node.operit",
+  "entry": "dist/index.js",
+  "unsupportedEntry": "dist/unsupported.js",
+  "distDir": "dist",
+  "subpathTemplate": "<distDir>/<subpath>.js",
+  "subpathStrategy": "direct",
+  "requireExplicitExtension": true,
+  "requireExplicitExtensionReason": "包名含点（node.operit），Operit 的 buildCandidatePaths 会把 .operit 当成扩展名并只试一个候选，因此重写必须产出显式 .js 路径，不能依赖目录回落。",
+  "statusSemantics": {
+    "ready": "已实现并与 Node 对拍通过。",
+    "partial": "已实现，但有明确的、写在 note 里的差异或未覆盖部分。",
+    "planned": "尚未实现，计划中。OperitPackageManager 应当让构建失败，不要把问题带到运行期。",
+    "unsupported": "**不提供**。原因有两类，都写在 note 里：其一，平台不成立（例如 vm 需要 Node 运行时本身、dns 的记录级查询需要 Android 没有的 JNDI DNS provider）；其二，**刻意不做**（例如 net 的裸 socket —— 那会绕过 Operit 的工具审批模型）。两类都要求 OperitPackageManager 让构建失败。"
+  },
+  "builtins": {
+    "path": {
+      "subpath": "path",
+      "status": "ready"
+    },
+    "path/posix": {
+      "subpath": "path/posix",
+      "status": "ready"
+    },
+    "path/win32": {
+      "subpath": "path/win32",
+      "status": "partial",
+      "note": "与 Node 的 path.win32 在两类边缘有偏差：1) 归一化时含歧义冒号的相对路径（如 '9:'）缺少 '.\\' 前缀；2) UNC 根的 dirname/parse 边界。日常 Windows 路径形态经对拍一致，分歧率约 1.5%。"
+    },
+    "fs": {
+      "subpath": "fs",
+      "status": "partial",
+      "note": "Node 语义层（选项、flag、错误码、返回值形状）已与本机 Node 的 fs 逐项对拍通过，覆盖同步面、fd 系列（openSync/readSync/writeSync/closeSync/fstatSync/ftruncateSync/fsyncSync）、回调形式、流式接口与 fs/promises（open 按 Node 语义返回 FileHandle，其 read/write 返回 {bytesRead/buffer} / {bytesWritten/buffer}）。Java 驱动依赖的 bridge 行为尚未真机验证。已知近似：atime/ctime/birthtime 取 mtime；mode 为按类型的默认值；readdir 不区分符号链接；读流是「按需整块读 + 切片」，没有流式的内存特性，'open' 事件参数为 null；fstat 走路径而不是 fd（文件被 unlink 后行为不同）。"
+    },
+    "fs/promises": {
+      "subpath": "fs/promises",
+      "status": "partial",
+      "note": "同步面包 Promise；宿主只有 Java bridge 一条同步通道，所以是「接口异步、执行同步」。近似点同 fs。"
+    },
+    "buffer": {
+      "subpath": "buffer",
+      "status": "ready",
+      "note": "与 Node 的 Buffer 逐项对拍通过，含 Node 特有的 base64 容错规则与 ascii 编解码不对称行为。"
+    },
+    "os": {
+      "subpath": "os",
+      "status": "partial",
+      "note": "形状与语义对齐 Node，取值来自 Android。近似：totalmem/freemem 是 JVM 堆而非物理内存；cpus() 的 model 取 os.arch、speed/times 为 0；homedir() 为 /sdcard；loadavg() 恒 [0,0,0]；getPriority/setPriority 抛 ONJ_UNSUPPORTED（POSIX niceness 在 Android 不成立）。"
+    },
+    "process": {
+      "subpath": "process",
+      "status": "partial",
+      "note": "require('process') 返回的进程对象；Operit 没有 process 全局，裸引用需 OperitPackageManager 注入。差异：env 是 Proxy（读走 getEnv，空串与未设置都表现为 undefined，无法枚举）；写环境变量依赖未文档化的 NativeInterface.setEnv；exit/abort 显式抛 ONJ_UNSUPPORTED；versions.node 是声明的兼容目标而非真实运行时版本。"
+    },
+    "util": {
+      "subpath": "util",
+      "status": "partial",
+      "note": "format（占位符、参数不足、多余参数、%%、%c）、promisify、inherits、types、isDeepStrictEqual、TextEncoder/TextDecoder 已实现并对拍；isDeepStrictEqual 已与 Node 在 4225 对语料上零分歧（含 Map/Set/TypedArray/循环引用/符号键/-0/NaN），实现见 lib/deep-equal.ts，assert 也复用它。inspect 只对齐常用形态，支持 compact: false 的多行排版，但 Node 的 breakLength 折行算法未照搬。TextDecoder 只支持 utf-8。"
+    },
+    "events": {
+      "subpath": "events",
+      "status": "ready",
+      "note": "EventEmitter 行为序列与 Node 对拍一致。差异：不能用 EventEmitter.call(this) 做函数式继承；captureRejections 与 events.on()（异步迭代器）未实现。"
+    },
+    "string_decoder": {
+      "subpath": "string_decoder",
+      "status": "ready",
+      "note": "utf8/utf16le/base64 的跨块缓冲语义与 Node 对拍一致（含 end() 只吐一个 U+FFFD）。"
+    },
+    "assert": {
+      "subpath": "assert",
+      "status": "partial",
+      "note": "已实现：模块本身可调用，ok/equal/notEqual/strictEqual/notStrictEqual/deepStrictEqual/notDeepStrictEqual/deepEqual/notDeepEqual/throws/doesNotThrow/rejects/doesNotReject/ifError/match/doesNotMatch/fail/AssertionError。错误字段（code/operator/generatedMessage/actual/expected）与 Node 逐项对拍一致。唯一消息差异：assert.ok / assert(value) 失败时 Node 会把调用处的源码表达式附在消息里（取源码要读栈指向的文件，QuickJS 上不可靠），这里只给出 'The expression evaluated to a falsy value'。差异块用的是「公共前后缀 diff」，对单点差异与 Node 逐字一致，多段交错差异时 Node 的 Myers diff 对齐方式可能不同。"
+    },
+    "assert/strict": {
+      "subpath": "assert/strict",
+      "status": "partial",
+      "note": "与 require('assert').strict 是同一对象；equal 等同 strictEqual，deepEqual 等同 deepStrictEqual。实现与限制同 assert。"
+    },
+    "querystring": {
+      "subpath": "querystring",
+      "status": "ready",
+      "note": "stringify/parse/escape/unescape 与 Node 对拍一致，含宽松百分号解码与 maxKeys 的空分段计数行为。"
+    },
+    "url": {
+      "subpath": "url",
+      "status": "partial",
+      "note": "已实现并与 Node 对拍：URLSearchParams、**WHATWG URL**（特殊协议与自定义协议、authority、IPv4/IPv6/域名 punycode、按组件的百分号编码、点段规范化、相对引用、全部 getter 与 setter、searchParams 活视图、URL.canParse / URL.parse）、旧版 parse/format/resolve、pathToFileURL/fileURLToPath、urlToHttpOptions、domainToASCII/domainToUnicode。对拍规模：53 条绝对 URL 逐字段比对 + 12 条相对引用 + 9 个 setter + 活视图与 canParse/parse，零分歧。已知差异：blob: 的 origin 返回 'null'（Node 会解析内部 URL）；域名只做 RFC 3492 punycode，不做 UTS-46 映射与归一化；pathToFileURL/fileURLToPath 是 POSIX 规则（面向 Android），Node 在 Windows 上给的是带盘符的形式。几处容易想当然的细节都是实测出来的（空查询 '?' 的 search 是 '' 但 href 保留 '?'、主机结尾的点要保留、file://localhost 归一成空主机、http:///path 的主机是 path），注释都在 src/lib/url-whatwg.ts。punycode 只做 RFC 3492 本体。"
+    },
+    "crypto": {
+      "subpath": "crypto",
+      "status": "partial",
+      "note": "已实现并与 Node 全量对拍：createHash（md5/sha1/sha224/sha256/sha384/sha512，纯 JS 实现）、createHmac、pbkdf2/pbkdf2Sync、timingSafeEqual、getHashes、randomBytes/randomFillSync/randomUUID/randomInt（随机数走 java.util.UUID.randomUUID，无需往 bridge 传 byte[]）。未实现，调用即抛 ONJ_UNSUPPORTED：createCipheriv/createDecipheriv/createSign/createVerify/generateKeyPair(Sync)/createDiffieHellman。"
+    },
+    "zlib": {
+      "subpath": "zlib",
+      "status": "partial",
+      "note": "已实现并与 Node 双向对拍：inflate/inflateRaw/gunzip/unzip（完整 DEFLATE，含 stored、定长与动态 Huffman）、deflate/deflateRaw/gzip（定长 Huffman + LZ77）、流式接口（createGzip/createGunzip/createDeflate/createInflate/createDeflateRaw/createInflateRaw/createUnzip）、同步与回调两种形式、constants。压缩侧未实现动态 Huffman，压缩率低于 zlib，但输出是任何解压器都能读的合法流。流式接口基于 stream.Transform，但内部仍是一次性处理（攒到 _flush 才压缩/解压），没有真流式的低延迟与低内存。Brotli 未实现。"
+    },
+    "stream": {
+      "subpath": "stream",
+      "status": "partial",
+      "note": "Readable/Writable/Duplex/Transform/PassThrough、pipe/unpipe、pipeline 与 finished（回调形式）、Symbol.asyncIterator、Readable.from 已实现，9 个场景与 Node 对拍一致。用 queueMicrotask 调度，事件时序与 Node 同类但不必逐拍相同（测试比对的是语义结果）。未实现：objectMode 的完整语义差异、cork 的合并优化、compose、addAbortSignal。stream.pipeline 不给回调会按 Node 语义抛 ERR_INVALID_ARG_TYPE，Promise 形式请用 stream/promises。"
+    },
+    "stream/promises": {
+      "subpath": "stream/promises",
+      "status": "partial",
+      "note": "pipeline / finished 的 Promise 版；与 require('stream').promises 是同一份实现。"
+    },
+    "timers": {
+      "subpath": "timers",
+      "status": "partial",
+      "note": "setTimeout / clearTimeout / setInterval / clearInterval 就是宿主提供的全局函数本身（Node 的 timers.setTimeout === 全局 setTimeout 也是如此）。setImmediate / clearImmediate 宿主没有，落在 setTimeout(…, 0) 上 —— 因此在 Operit 里它与定时器是同一个队列（Node 里 setImmediate 在 check 阶段、先于定时器）。promisify(setTimeout) 可用（按需补 promisify.custom，宿主已有就不动）。"
+    },
+    "timers/promises": {
+      "subpath": "timers/promises",
+      "status": "partial",
+      "note": "setTimeout / setImmediate / scheduler.wait / scheduler.yield 已实现并与 Node 对拍（含 value 传递、AbortError）。setInterval 用「每次 await 一个 setTimeout」实现，不是原生 interval，因此延迟会随迭代累积漂移（可迭代与取消语义与 Node 一致）。signal 只按结构检查（aborted / addEventListener），因为没有 AbortController。"
+    },
+    "child_process": {
+      "subpath": "child_process",
+      "status": "partial",
+      "note": "已实现：exec/execSync/execFile/execFileSync/spawn/spawnSync、ChildProcess 的 spawn/exit/close/error 事件与 stdout/stderr/stdin、pid、exitCode、kill，以及 Node 的错误形态（非零退出码放 error.status、启动失败放 error.code='ENOENT'、maxBuffer 超出抛 ERR_CHILD_PROCESS_STDIO_MAXBUFFER）。差异：宿主只有同步 bridge，所以 spawn 是「先同步跑完、再异步发事件」——没有真并发与背压，长驻进程会阻塞调用方；输出按 UTF-8 解码（驱动用 java.util.Scanner 读取，因为 InputStream.readAllBytes 是 Java 9，Android 8~12 没有），二进制输出会有损；先读 stdout 再读 stderr，若子进程往 stderr 写超过管道缓冲会死锁。未实现：fork（需要 Node 运行时本身）。"
+    },
+    "net": {
+      "subpath": "net",
+      "status": "unsupported",
+      "note": "刻意不提供。net 需要裸 TCP/UDP socket，技术上可以用 java.net.Socket 实现，但那会让插件绕过 Operit 的工具审批模型：网络访问在 Operit 里是**工具能力**（http_request 等，走用户审批），用裸 socket 另起一套等于绕过它。http/https 已经建在 toolCall('http_request') 之上（见 http 条目）；如果将来 Operit 提供原始 socket 类工具，net 可以照同样的方式补上。在那之前，需要网络请用 toolCall / 内建 axios。"
+    },
+    "http": {
+      "subpath": "http",
+      "status": "partial",
+      "note": "只有**客户端**。建在宿主的 toolCall('http_request') 之上，不直接用 Java socket —— http_request 是 Operit 注册的工具（ToolRegistration.kt:1967），走用户审批；用裸 socket 另起一套等于绕过那个模型。覆盖：request / get、ClientRequest（Writable：setHeader/getHeader/getHeaders/getHeaderNames/hasHeader/removeHeader、write/end、setTimeout、abort）、IncomingMessage（Readable：statusCode/statusMessage/headers（键名全小写）/rawHeaders/httpVersion/url）、STATUS_CODES、METHODS、Agent（无连接池）、globalAgent。与 Node 的差异：createServer / Server 构造时显式抛 ONJ_UNSUPPORTED（沙箱没有可监听的 socket）；请求体只支持文本（宿主工具的参数是字符串），二进制上行不做；abort() 只发出 'abort' 事件，无法真正取消已在宿主侧执行的请求（工具调用没有取消通道）；没有连接池 / keep-alive / HTTP/2；重定向是否跟随由宿主决定。响应体优先用 contentBase64 还原字节，缺失时才按 UTF-8 解释 content。宿主返回形状取自 HttpResponseData（ToolResultDataClasses.kt:600）；形状不对时明确报错，不静默兜底。**尚未真机验证**。"
+    },
+    "https": {
+      "subpath": "https",
+      "status": "partial",
+      "note": "只有**客户端**。建在宿主的 toolCall('http_request') 之上，不直接用 Java socket —— http_request 是 Operit 注册的工具（ToolRegistration.kt:1967），走用户审批；用裸 socket 另起一套等于绕过那个模型。覆盖：request / get、ClientRequest（Writable：setHeader/getHeader/getHeaders/getHeaderNames/hasHeader/removeHeader、write/end、setTimeout、abort）、IncomingMessage（Readable：statusCode/statusMessage/headers（键名全小写）/rawHeaders/httpVersion/url）、STATUS_CODES、METHODS、Agent（无连接池）、globalAgent。与 Node 的差异：createServer / Server 构造时显式抛 ONJ_UNSUPPORTED（沙箱没有可监听的 socket）；请求体只支持文本（宿主工具的参数是字符串），二进制上行不做；abort() 只发出 'abort' 事件，无法真正取消已在宿主侧执行的请求（工具调用没有取消通道）；没有连接池 / keep-alive / HTTP/2；重定向是否跟随由宿主决定。响应体优先用 contentBase64 还原字节，缺失时才按 UTF-8 解释 content。宿主返回形状取自 HttpResponseData（ToolResultDataClasses.kt:600）；形状不对时明确报错，不静默兜底。**尚未真机验证**。 与 http 是同一套实现（TLS 由宿主那侧处理，沙箱里既没有 socket 也没有证书链可管），只把缺省协议改成 https:。"
+    },
+    "dns": {
+      "subpath": "dns",
+      "status": "partial",
+      "note": "实现了 **lookup 一族**（getaddrinfo），也就是绝大多数代码真正用到的那部分：lookup / lookupService / promises.lookup / promises.lookupService / getServers / setServers / getDefaultResultOrder / setDefaultResultOrder / 常量（hints 与错误码字符串，数值对齐 Node 而非 libuv 原始值）。底层是 java.net.InetAddress。**resolve 一族（resolve/resolve4/resolve6/resolveAny/resolveCaa/resolveCname/resolveMx/resolveNaptr/resolveNs/resolvePtr/resolveSoa/resolveSrv/resolveTlsa/resolveTxt）与 reverse 显式抛 ONJ_UNSUPPORTED**：它们需要 DNS 记录级查询，而这要 JNDI 的 DNS provider，com.sun.jndi.dns 不在 Android 里 —— 是平台不成立，不是尚未实现。其它差异：接口异步（queueMicrotask）但底层 getaddrinfo 是同步的；getServers() 返回空数组（Android 的 DNS 由 netd 按网络管理，JVM 侧读不到）；setServers() 抛 ONJ_UNSUPPORTED（改不了 JVM 解析器）；hints 选项接受但不生效；lookupService 的 service 用内置常见端口表，未命中给端口号字符串（Node 走系统的 services 库）。错误形状与实测 Node 对齐：code='ENOTFOUND'、errno=-3008、syscall='getaddrinfo'、hostname，message 为 'getaddrinfo ENOTFOUND <host>'。**尚未真机验证**。"
+    },
+    "perf_hooks": {
+      "subpath": "perf_hooks",
+      "status": "partial",
+      "note": "performance（now / timeOrigin / mark / measure / getEntries* / clearMarks / clearMeasures）与 constants 已实现并与 Node 对拍。注意 measure 的位置参数形式**只认 mark 名字**、数字不当时间戳（实测 Node 就是如此），数字要当时间戳得用 options 形式 measure(name, {start, end})。未实现：PerformanceObserver、PerformanceEntry 等类、monitorEventLoopDelay、createHistogram —— 保持 undefined，不给空壳。"
+    },
+    "readline": {
+      "subpath": "readline",
+      "status": "planned",
+      "note": "尚未实现。技术上可行（readline 可以跑在任意流上，不必是真终端），但 Operit 沙箱里没有交互式 stdin，实际价值有限，所以优先级排在最后。OperitPackageManager 应当让构建失败。"
+    },
+    "constants": {
+      "subpath": "constants",
+      "status": "partial",
+      "note": "合并 fs / os / zlib / crypto 的常量并把 os.constants 的 signals / errno / priority 摊平到顶层（252 个键），含完整的 Linux errno 表（134 项）。给出的是 **Linux/Android** 的数值：O_CREAT / O_EXCL / O_TRUNC / O_APPEND 与 Node 在 Windows 上的不同，这是平台差异。未提供：大部分 libuv 内部常量（只给了少数 UV_FS_* / UV_DIRENT_* 镜像）、Windows 专有常量（WSA* / SIGBREAK）、Brotli 与 Zstd（BROTLI_* / ZSTD_*）以及 ZLIB_VERNUM。测试里有一份「分歧普查」，把这些缺口分类列出来。"
+    },
+    "module": {
+      "subpath": "module",
+      "status": "partial",
+      "note": "builtinModules（与 BUILTINS.json 的键逐字一致，测试断言两者同步，改契约表时会失败提醒）与 isBuiltin（认 node: 前缀）。createRequire() 显式抛 ONJ_UNSUPPORTED：它依赖 node_modules 逐级查找与 main/exports 解析，而 Operit 的 require 两样都没有。Module 类与 _resolveFilename 等内部接口不提供。"
+    },
+    "vm": {
+      "status": "unsupported",
+      "reason": "QuickJS 运行时未暴露独立上下文创建能力。"
+    },
+    "worker_threads": {
+      "status": "unsupported",
+      "reason": "QuickJS 运行时为单线程解释器，无 worker 能力。"
+    },
+    "cluster": {
+      "status": "unsupported",
+      "reason": "依赖 worker_threads。"
+    },
+    "async_hooks": {
+      "status": "unsupported",
+      "reason": "QuickJS 未暴露异步资源跟踪钩子。"
+    },
+    "inspector": {
+      "status": "unsupported",
+      "reason": "无 V8 inspector 协议。"
+    },
+    "repl": {
+      "status": "unsupported",
+      "reason": "无 stdin/stdout 终端语义。"
+    },
+    "tty": {
+      "subpath": "tty",
+      "status": "partial",
+      "note": "isatty() 恒为 false（沙箱里没有终端，这正是 supports-color / debug 这类包需要知道的答案）。ReadStream / WriteStream 需要真实终端，构造时显式抛 ONJ_UNSUPPORTED，不给「能 new 但不能用」的空壳。"
+    }
+  },
+  "packing": {
+    "summary": "OperitPackageManager 打包期必须做的裸名处理。Operit 的 require 没有 node_modules 查找：resolveModulePath 对不以 . 或 / 开头的请求原样返回，requireInternal 对 lodash/uuid/axios 之外的一律 return {}（静默）。",
+    "rules": [
+      "先定位本包在消费方 node_modules 里的**实际安装目录**再拼路径。当前发布形态是带 scope 的 @serveryyswys/node.operit，即 node_modules/@serveryyswys/node.operit/；下面说的 <本包安装目录> 就是它。规则本身与 scope 无关。",
+      "所有裸名都要重写，不只是 Node 内建：Node 内建 -> <本包安装目录>/dist/<subpath>.js；npm 包 -> 该包入口文件（main/exports 在打包期解析，运行期没有这个能力）。",
+      "lodash / uuid / axios 保持原样（Operit 自带，分别是 lodash 全局、只含 v4 的桩、走 toolCall 的桩）。",
+      "改写成相对路径时始终带显式 .js：buildCandidatePaths 用 /\\.[a-z0-9]+$/i 判断有无扩展名，而 node.operit 这个名字本身自带一个点。",
+      "相对路径的 .json require **可选地**换成包装模块（module.exports = <json>）。当前 Operit 源码的 executeModule（JsExecutionScriptBuilder.kt:1231）有显式 .json 分支、走 JSON.parse，所以在新构建上不是必需的；生成包装模块只为兼容更早的构建。重写器可以按目标运行时版本决定开不开，产物两种都能跑。",
+      "只处理从入口可达的文件：npm 包里的 tests/ 常引用未安装的 devDependency（safer-buffer/tests.js 就是）。",
+      "契约表里 status 为 planned / unsupported 的裸名要让构建失败，不能留到运行期静默变成 {}。",
+      "扫描 require 必须跳过注释与字符串：node.operit 自己的文档注释里就有 require('<项目>/<本包安装目录>/index.js')，用正则扫会误报成依赖。",
+      "把 process（以及 Buffer）注入为**全局**，不要只在入口脚本里 require 一次。实测：supports-color 顶层就是 const {env} = process，没有 process 全局会在 require 时直接抛 'process is not defined'（debug / chalk 都依赖它）；注入之后 supports-color 的行为与 Node 完全一致（supportsColorKeys 与 supportsColor.stdout 的取值都相同）。这也会让 debug 之类的包从 browser 分支切回 node 分支。"
+    ],
+    "verifiedBy": "integration/tools/run.js —— 装真实 npm 包（ms / iconv-lite / safer-buffer），按上述规则打包，用忠实复刻 JsExecutionScriptBuilder.kt 的运行时模拟器加载，再与 Node 原生加载器的结果逐字段比对。",
+    "processGlobalEvidence": {
+      "withoutInjecting": "supports-color require 抛错：process is not defined；debug 走 browser 分支",
+      "withInjecting": "supports-color 导出 [stderr, stdout, supportsColor]，stdout=false，与 Node 一致",
+      "verifiedBy": "integration/tools/run.js 的「对照实验」一节（同一份打包产物，开/关 injectProcess 各跑一遍）"
+    }
+  },
+  "installDir": "node_modules/@serveryyswys/node.operit",
+  "installDirNote": "npm 上带 scope，所以安装路径是 node_modules/@serveryyswys/node.operit/。重写规则本身与 scope 无关：目标是「相对本包实际安装目录」的路径，改 scope 不需要改契约。",
+  "runtimeResolution": {
+    "note": "打包方（OperitPackageManager / OPM）必须按这些语义产出产物，否则会出现「装好了但 require 不到」。依据是 Operit-src 的 JsExecutionScriptBuilder.kt 与真机实测。",
+    "moduleSource": "require 只从 toolpkg 归档读模块：NativeInterface.readToolPkgTextResource(toolPkgId, path)（:675）。完全不碰文件系统 —— 把 node_modules 铺在 /sdcard 上，运行期永远 require 不到，这与有没有重写裸名无关。",
+    "requiresProperToolPkg": "必须是正规 toolpkg（有 toolPkgId、入口已注册为 screen）。单文件 .js 沙盒包不行：screenPath 为空、也没有归档资源，所有路径型 require 全部失败（真机实测）。",
+    "bareNameFallback": "裸名（不以 ./ 或 / 开头）→ 除 lodash / uuid / axios 外静默返回 {}，不抛错（:1288）。这是最难排查的一种失败：报错点不指向 require。",
+    "unresolvedPath": "路径型请求解析不到 → 抛 Cannot resolve module \"x\" from \"<root>\"（:1301）。",
+    "entryBase": "入口脚本的相对 require 以 dirname(screenPath) 为基准，screenPath = moduleSpec.screen = 入口脚本路径（:1316 / :663）。",
+    "nestedBase": "嵌套模块的相对 require 以自身路径为基准（:1242），即标准 CommonJS。",
+    "pathNormalization": "normalizePath 丢掉开头的 /，且越界的 .. 直接丢弃，逃不出根（:209）。",
+    "extensionRule": "名字命中 /\\.[a-z0-9]+$/i 就只有一个候选、不补 .js（:254）—— 所以重写目标必须显式带扩展名。",
+    "jsonModules": ".json 走 JSON.parse（:1231，当前源码）。",
+    "conclusion": "重写目标要相对入口脚本所在目录（嵌套模块则是相对自身；在「入口位于包根」的常规布局下两者一致），并且 node_modules 必须进归档。"
+  },
+  "packagingTool": "OperitPackageManager (OPM)",
+  "packagingToolNote": "打包期负责裸名重写与归档的一方。本文档里出现的 OperitPackageManager / OPM 都指它；命令行示例用 opm。"
+}
