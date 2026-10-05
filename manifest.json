@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "toolpkg_id": "com.operit.serveryyswys.opm",
+  "version": "0.1.0",
+  "api_version": "1.0.1",
+  "requires": [],
+  "author": ["serveryyswys"],
+  "main": "main.js",
+  "display_name": {
+    "zh": "OperitPackageManager",
+    "en": "OperitPackageManager"
+  },
+  "description": {
+        "zh": "在 Operit 上还原 npm 生态的包管理器：init / search / install / remove / manager / build / verify，默认对接辰锤 npm 私有源。",
+        "en": "An npm-like package manager on Operit: init / search / install / remove / manager / build / verify, backed by the Chenchui private npm registry."
+  },
+  "subpackages": [
+    {
+      "id": "opm",
+      "entry": "packages/opm.js",
+      "enabled_by_default": true,
+      "display_name": {
+        "zh": "opm 包管理器",
+        "en": "opm Package Manager"
+      },
+      "description": {
+            "zh": "【开发工具】适用于 Operit 开发工程的类 npm 包管理工具，提供 init / search / install / remove / manager / build / verify 七个工具",
+            "en": "[Development Tools] A npm-like package management tool for Operit development projects, offering seven commands: init, search, install, remove, manager, build, and verify."
+      }
+    }
+  ]
+}

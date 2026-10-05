@@ -1,0 +1,12 @@
+{
+  "name": "com.operit.opm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OPM - npm-like package manager for Operit (Chenchui ecosystem)",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
