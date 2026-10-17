@@ -20,6 +20,7 @@ import {
     isImplemented
 } from './contract';
 import { normalizePath, dirname } from './rewriter';
+import { readTextSafeAsync } from '../core/nodesafe';
 
 export interface ResolvedBare {
     /** 解析出的归档内路径（相对项目根，不带前导 /） */
@@ -55,16 +56,19 @@ async function exists(p: string): Promise<boolean> {
 
 async function readJson(projectDir: string, relPath: string): Promise<any | null> {
     try {
-        const r = await Tools.Files.read(join(projectDir, relPath));
-        return JSON.parse(r.content);
+        const text = await readTextSafeAsync(join(projectDir, relPath));
+        if (text === null) return null;
+        return JSON.parse(text);
     } catch (err) {
         return null;
     }
 }
 
 /**
- * 解析 npm 包的入口文件（打包期）。
- * 顺序：exports['.'] / exports['./'] -> exports 字符串 -> main -> index.js
+ * 解析 npm 包（或包内子路径）的入口文件（打包期）。对齐 Node 的 CommonJS 解析：
+ *   - 'pkg'           -> 包入口（exports['.'] -> exports 字符串 -> main -> index.js）
+ *   - 'pkg/sub/path'  -> 先看 exports['./sub/path']（含通配 *），否则直接找文件
+ *   - '@scope/pkg/x'  -> 同上，包名是前两段
  * 返回相对项目根的归档内路径；找不到返回 null。
  *
  * 若传 roots（多查找根），则依次在每个 root 的 node_modules 下找；
@@ -72,43 +76,94 @@ async function readJson(projectDir: string, relPath: string): Promise<any | null
  */
 export async function resolveNpmEntry(
     projectDir: string,
-    pkgName: string,
+    name: string,
     roots?: string[]
 ): Promise<string | null> {
+    // 拆包名与子路径：@scope/pkg[/sub] 或 pkg[/sub]
+    const parsed = splitPackageSpecifier(name);
+    if (!parsed) return null;
+    const { pkgName, subpath } = parsed;
     const searchRoots = (roots && roots.length) ? roots : [projectDir];
     for (const root of searchRoots) {
-        const hit = await resolveNpmEntryInRoot(root, pkgName);
-        if (hit) return hit;
+        const hit = await resolveNpmEntryInRoot(root, pkgName, subpath);
+        if (!hit) continue;
+        // 命中 root 可能是嵌套目录（如 node_modules/_nest1_lib）；
+        // 此时返回的路径是「相对该 root」的，需补回它相对项目根的偏移，
+        // 保证归档路径始终是「从项目根算起」的完整层级：
+        //   node_modules/_nest1_lib/node_modules/_nest1_dep/index.js
+        const off = relOffset(projectDir, root);
+        return off ? normalizePath(join(off, hit)) : hit;
     }
     return null;
 }
-
-/** 在单个 root 的 node_modules 下解析 npm 包入口 */
+/** root 相对 base 的偏移（归档路径片段）；base 本身返回空串 */
+function relOffset(base: string, root: string): string {
+    const b = normalizePath(base);
+    const r = normalizePath(root);
+    if (r === b) return '';
+    if (r.indexOf(b + '/') === 0) return r.slice(b.length + 1);
+    return ''; // 不在 base 之下（如全局影子目录）→ 不补偏移
+}
+/**
+ * 拆 CommonJS 包名与子路径：
+ *   'pkg'              -> { pkgName: 'pkg', subpath: '' }
+ *   'pkg/a/b.js'       -> { pkgName: 'pkg', subpath: 'a/b.js' }
+ *   '@s/pkg'           -> { pkgName: '@s/pkg', subpath: '' }
+ *   '@s/pkg/a'         -> { pkgName: '@s/pkg', subpath: 'a' }
+ * 非法（空、@ 但段不足）返回 null。
+ */
+function splitPackageSpecifier(name: string): { pkgName: string; subpath: string } | null {
+    const n = normalizePath(String(name || '').trim());
+    if (!n) return null;
+    const segs = n.split('/');
+    if (segs[0].startsWith('@')) {
+        if (segs.length < 2 || !segs[0] || !segs[1]) return null;
+        return { pkgName: segs[0] + '/' + segs[1], subpath: segs.slice(2).join('/') };
+    }
+    if (!segs[0]) return null;
+    return { pkgName: segs[0], subpath: segs.slice(1).join('/') };
+}
+/**
+ * 在单个 root 的 node_modules 下解析 npm 包入口（或包内子路径）。
+ */
 async function resolveNpmEntryInRoot(
     projectDir: string,
-    pkgName: string
+    pkgName: string,
+    subpath?: string
 ): Promise<string | null> {
     // scoped 包名 @scope/name 的结构与普通包一致，路径即 pkgName
     const pkgRoot = normalizePath(join('node_modules', pkgName));
     const pkgJsonRel = join(pkgRoot, 'package.json');
     const pkgJson = await readJson(projectDir, pkgJsonRel);
-
+    const pkgRootAbs = join(projectDir, pkgRoot);
     const tryFile = async (rel: string): Promise<string | null> => {
         const p = normalizePath(rel);
         // 已带扩展名：只试原样（避免目录误命中，先试 .js 变体）
         if (/\.[a-z0-9]+$/i.test(p)) {
-            if (await exists(join(projectDir, p))) return p;
+            if (await exists(join(pkgRootAbs, p))) return join(pkgRoot, p);
             return null;
         }
         // 无扩展名：按 .js / /index.js / 原样 顺序
-        if (await exists(join(projectDir, p + '.js'))) return p + '.js';
-        if (await exists(join(projectDir, p + '/index.js'))) return p + '/index.js';
-        if (await exists(join(projectDir, p))) return p;
+        if (await exists(join(pkgRootAbs, p + '.js'))) return join(pkgRoot, p + '.js');
+        if (await exists(join(pkgRootAbs, p + '/index.js'))) return join(pkgRoot, p + '/index.js');
+        if (await exists(join(pkgRootAbs, p))) return join(pkgRoot, p);
         return null;
     };
-
+    // ---- 子路径：优先 exports['./<sub>'] 映射，再直接当文件找 ----
+    if (subpath) {
+        if (pkgJson && pkgJson.exports) {
+            const mapped = mapExportsSubpath(pkgJson.exports, './' + subpath);
+            if (mapped) {
+                const f = await tryFile(mapped);
+                if (f) return f;
+            }
+        }
+        const direct = await tryFile(subpath);
+        if (direct) return direct;
+        return null;
+    }
+    // ---- 包根：exports['.'] -> exports 字符串 -> main -> index.js ----
     if (pkgJson) {
-        // exports 字段
         const ex = pkgJson.exports;
         if (ex) {
             let dot: any = null;
@@ -116,27 +171,67 @@ async function resolveNpmEntryInRoot(
             else if (typeof ex === 'object') {
                 dot = ex['.'] !== undefined ? ex['.'] : ex['./'];
             }
-            if (typeof dot === 'string') {
-                const f = await tryFile(join(pkgRoot, dot));
+            const resolvedDot = resolveCondition(dot);
+            if (typeof resolvedDot === 'string') {
+                const f = await tryFile(resolvedDot);
                 if (f) return f;
-            } else if (dot && typeof dot === 'object') {
-                // 条件导出：优先 require / default / node
-                const cond = dot.require || dot.node || dot['default'] || dot.import;
-                if (typeof cond === 'string') {
-                    const f = await tryFile(join(pkgRoot, cond));
-                    if (f) return f;
-                }
             }
         }
-        // main 字段
         if (typeof pkgJson.main === 'string' && pkgJson.main) {
-            const f = await tryFile(join(pkgRoot, pkgJson.main));
+            const f = await tryFile(pkgJson.main);
             if (f) return f;
         }
     }
     // 兜底：index.js
-    const idx = await tryFile(join(pkgRoot, 'index.js'));
+    const idx = await tryFile('index.js');
     if (idx) return idx;
+    return null;
+}
+/** 从 exports 里解析条件导出对象，按 require / node / default / import 优先 */
+function resolveCondition(dot: any): any {
+    if (dot && typeof dot === 'object' && !Array.isArray(dot)) {
+        return dot.require !== undefined ? dot.require
+            : dot.node !== undefined ? dot.node
+            : dot['default'] !== undefined ? dot['default']
+            : dot.import;
+    }
+    return dot;
+}
+/**
+ * 把 exports 字段里 key='./sub' 的映射解析成目标相对路径。
+ * 支持：精确键、通配键 './sub/*'、以及 exports 为字符串/条件对象/嵌套数组。
+ * 返回文件相对路径（string）或 null。
+ */
+function mapExportsSubpath(exportsField: any, subKey: string): string | null {
+    if (exportsField === null || typeof exportsField !== 'object' || Array.isArray(exportsField)) {
+        return null;
+    }
+    // 精确匹配
+    if (Object.prototype.hasOwnProperty.call(exportsField, subKey)) {
+        const v = resolveCondition(exportsField[subKey]);
+        if (typeof v === 'string') return v;
+        if (Array.isArray(v)) {
+            for (const item of v) {
+                const c = resolveCondition(item);
+                if (typeof c === 'string') return c;
+            }
+        }
+    }
+    // 通配匹配：key 含 '*'
+    for (const key of Object.keys(exportsField)) {
+        const star = key.indexOf('*');
+        if (star < 0) continue;
+        const prefix = key.slice(0, star);
+        const suffix = key.slice(star + 1);
+        if (subKey.length < prefix.length || subKey.indexOf(prefix) !== 0) continue;
+        if (!subKey.endsWith(suffix)) continue;
+        const wildcard = subKey.slice(prefix.length, subKey.length - suffix.length);
+        const v = resolveCondition(exportsField[key]);
+        const tpl = typeof v === 'string' ? v : (Array.isArray(v) ? v.map(resolveCondition).find((x) => typeof x === 'string') : null);
+        if (typeof tpl === 'string') {
+            return tpl.split('*').join(wildcard);
+        }
+    }
     return null;
 }
 

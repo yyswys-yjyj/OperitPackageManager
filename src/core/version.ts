@@ -11,6 +11,7 @@
 
 import { readPackageJson } from './locker';
 import { listGlobalPackages } from './globalnpm';
+import { readTextSafeAsync } from './nodesafe';
 
 export interface LibVersion {
     name: string;
@@ -51,8 +52,8 @@ async function readJson(path: string): Promise<any | null> {
     try {
         const ex = await Tools.Files.exists(path);
         if (!ex || !ex.exists) return null;
-        const r = await Tools.Files.read(path);
-        return JSON.parse(r.content);
+        const text = await readTextSafeAsync(path);
+        return text === null ? null : JSON.parse(text);
     } catch (e) {
         return null;
     }

@@ -63,7 +63,7 @@ export async function prepareGlobalShadow(projectDir: string): Promise<ShadowRes
     } catch (err) { hasLocal = false; }
     if (hasLocal) {
         await exec('rm -rf ' + shq(shadow), 15000);
-        return { shadowRoot: null, count: 0, dir: shadow, message: '本地已装 node.operit，跳过全局镜像' };
+        return { shadowRoot: null, count: 0, dir: shadow, message: '依赖来源：本地' };
     }
 
     // 1. 清旧影子 + 建新
@@ -78,7 +78,7 @@ export async function prepareGlobalShadow(projectDir: string): Promise<ShadowRes
     if (n <= 0) {
         // 全局为空：清掉空影子，返回 null
         await exec('rm -rf ' + shq(shadow), 15000);
-        return { shadowRoot: null, count: 0, dir: shadow, message: '全局目录为空，跳过影子' };
+        return { shadowRoot: null, count: 0, dir: shadow, message: '依赖来源：本地' };
     }
 
     // 3. 用 tar 管道复制（cp 不支持 --exclude），排除体积巨大的 meta 包。
@@ -93,7 +93,7 @@ export async function prepareGlobalShadow(projectDir: string): Promise<ShadowRes
     // 只要目录里确实有内容即视为成功（tar 可能因软链返回非零，但文件已落地）
     const nonEmpty = await exec('test -n "$(ls -A ' + shq(shadowNm) + ' 2>/dev/null)" && echo YES || echo NO', 15000);
     if (nonEmpty.output.indexOf('YES') < 0) {
-        return { shadowRoot: null, count: 0, dir: shadow, message: '镜像全局失败：' + cp.output.slice(0, 300) };
+        return { shadowRoot: null, count: 0, dir: shadow, message: '读取全局目录失败：' + cp.output.slice(0, 300) };
     }
 
     // 4. 统计镜像进来的包数（顶层 + scoped 两层）
@@ -111,7 +111,7 @@ export async function prepareGlobalShadow(projectDir: string): Promise<ShadowRes
         shadowRoot: shadow,
         count: count,
         dir: shadow,
-        message: '已镜像 ' + count + ' 个全局包 -> ' + shadow
+        message: '依赖来源：全局（' + count + ' 个包）'
     };
 }
 

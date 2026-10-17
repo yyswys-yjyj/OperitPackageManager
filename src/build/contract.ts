@@ -13,6 +13,8 @@
 const NODE_OPERIT_PKG = '@serveryyswys/node.operit';
 const NODE_OPERIT_DIR = 'node_modules/@serveryyswys/node.operit';
 
+import { readTextSafeAsync } from '../core/nodesafe';
+
 /** 单个 builtin 条目 */
 export interface BuiltinEntry {
     subpath: string;
@@ -91,8 +93,9 @@ export async function loadContract(projectDir: string, extraRoots?: string[]): P
     const p = join(dir, 'BUILTINS.json');
     let raw: any;
     try {
-        const r = await Tools.Files.read(p);
-        raw = JSON.parse(r.content);
+        const text = await readTextSafeAsync(p);
+        if (text === null) throw new Error('BUILTINS.json 读取为空');
+        raw = JSON.parse(text);
     } catch (e) {
         throw new Error('读取 BUILTINS.json 失败：' + String(e));
     }

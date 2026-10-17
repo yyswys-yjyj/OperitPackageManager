@@ -16,6 +16,7 @@
 import { extractTarball, getTmpDir, ensureDirs, shellQuote } from './fetch';
 import { readPackageJson, writePackageJson, join } from './locker';
 import { installDirToGlobal } from './globalnpm';
+import { readTextSafeAsync } from './nodesafe';
 
 export interface LocalInstallOptions {
     /** tgz 文件绝对路径（Android 侧） */
@@ -45,8 +46,8 @@ async function readJsonAt(dir: string): Promise<any | null> {
         const p = join(dir, 'package.json');
         const ex = await Tools.Files.exists(p);
         if (!ex || !ex.exists) return null;
-        const r = await Tools.Files.read(p);
-        return JSON.parse(r.content);
+        const text = await readTextSafeAsync(p);
+        return text === null ? null : JSON.parse(text);
     } catch (e) {
         return null;
     }

@@ -7,8 +7,18 @@
  *   GET {registry}/{name}/-/{tarball}        -> tgz 本体
  */
 
+import { readTextSafeAsync } from '../core/nodesafe';
 import { loadConfig } from './config.js';
 import { maxSatisfying, parseVersion } from './semver.js';
+
+declare const Tools: any;
+
+function join(a: string, b: string): string {
+    if (!a) return b;
+    if (!b) return a;
+    return a.endsWith('/') ? a + b : a + '/' + b;
+}
+
 
 export interface CatalogEntry {
     name: string;
@@ -54,6 +64,53 @@ function normalizeBase(registry: string): string {
     if (!/^https?:\/\//i.test(b)) b = 'https://' + b;
     if (!b.endsWith('/')) b += '/';
     return b;
+}
+
+/** .npmrc 解析结果 */
+export interface NpmrcConfig {
+    /** 主 registry（未配则空串） */
+    registry: string;
+    /** scope 级 registry：key 形如 '@serveryyswys'（含 @） */
+    scopes: Record<string, string>;
+}
+
+/**
+ * 读取并解析项目 .npmrc（只认 registry 与 @scope:registry 两类键）。
+ * 读不到返回空配置。
+ */
+export async function readNpmrc(projectDir: string): Promise<NpmrcConfig> {
+    const out: NpmrcConfig = { registry: '', scopes: {} };
+    let raw = '';
+    try {
+        const r = await readTextSafeAsync(join(projectDir, '.npmrc'));
+        if (typeof r === 'string') raw = r;
+    } catch (e) {
+        return out;
+    }
+    if (!raw) return out;
+    for (const line of raw.split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t || t.startsWith('#') || t.startsWith(';')) continue;
+        const eq = t.indexOf('=');
+        if (eq <= 0) continue;
+        const k = t.slice(0, eq).trim();
+        const v = t.slice(eq + 1).trim();
+        if (!k || !v) continue;
+        if (k === 'registry') { out.registry = v; continue; }
+        const m = /^(@[^:]+):registry$/i.exec(k);
+        if (m) out.scopes[m[1].toLowerCase()] = v;
+    }
+    return out;
+}
+
+/** 依据 .npmrc 为包名选 registry（scoped 命中 scope 源，否则主源；都没有返回 undefined） */
+export function pickRegistry(cfg: NpmrcConfig, pkgName: string): string | undefined {
+    const name = String(pkgName || '');
+    if (name.startsWith('@')) {
+        const scope = name.slice(0, name.indexOf('/') > 0 ? name.indexOf('/') : undefined).toLowerCase();
+        if (cfg.scopes[scope]) return cfg.scopes[scope];
+    }
+    return cfg.registry || undefined;
 }
 
 /** 拼目录 URL */

@@ -26,6 +26,9 @@ import {
     normalizePath,
     dirname
 } from './rewriter';
+import { scanRequiresAst } from './astscan';
+import { expandExtraEntry } from './extrafiles';
+import { readTextSafeAsync } from '../core/nodesafe';
 import {
     resolveBareName,
     ResolveError,
@@ -33,8 +36,10 @@ import {
 } from './resolver';
 
 export interface ArchiveFile {
-    /** 重写后的文本内容 */
+    /** 重写后的文本内容（二进制资源时为空串） */
     text: string;
+    /** 二进制内容（base64，仅 kind='extra' 的资源文件用；有值时 text 忽略） */
+    binary?: string;
     kind: 'entry' | 'local' | 'builtin' | 'npm' | 'extra';
 }
 
@@ -47,6 +52,8 @@ export interface ReachabilityResult {
     missing: Array<{ from: string; name: string; reason: string }>;
     /** 契约拦截（planned/unsupported） */
     violations: Array<{ from: string; name: string; reason: string }>;
+    /** 动态 require 记录：from=文件, prefix=可定前缀(空=完全动态), line=行号 */
+    dynamicRequires: Array<{ from: string; prefix: string; line: number }>;
 }
 
 export interface ReachabilityOptions {
@@ -101,6 +108,18 @@ async function resolveLocalDisk(
             const cand = join(ad, parts.join('/'));
             if (await fileExists(cand)) return cand;
         }
+        // ④ 反向剥：若归档路径以 artifactDirRel 开头（如 dist/libs/en.js），
+        //    其物理实体可能是源码目录下的裸文件（src/libs/en.js）——tsc 不搬运非 .ts
+        const adN = normalizePath(artifactDirRel);
+        let rev = p;
+        if (rev === adN) rev = '';
+        else if (rev.indexOf(adN + '/') === 0) rev = rev.slice(adN.length + 1);
+        if (rev) {
+            // ④a 直接相对 localRoot
+            if (await fileExists(join(localRoot, rev))) return join(localRoot, rev);
+            // ④b 常见 TS 源码根 src/
+            if (await fileExists(join(localRoot, 'src/' + rev))) return join(localRoot, 'src/' + rev);
+        }
     }
     return join(localRoot, p); // 回退
 }
@@ -127,18 +146,46 @@ async function diskPathOfMulti(
     return join(roots[0], p);
 }
 
+/**
+ * 为当前文件生成 node_modules 查找根列表（模拟 Node 逐级上溯）。
+ * 从当前文件所在目录开始，逐级向上到项目根，每一层的 node_modules 都是一个查找根。
+ * 这样能命中嵌套依赖 node_modules/<pkg>/node_modules/<dep>。
+ * 结果按 disk 绝对路径给，且去重、保持「越近越优先」。
+ */
+function nodeModuleLookupRoots(
+    fileArchivePath: string,
+    localRoot: string,
+    depsRoots: string[]
+): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const push = (v: string) => { if (v && !seen.has(v)) { seen.add(v); out.push(v); } };
+
+    const roots = (depsRoots && depsRoots.length) ? depsRoots : [localRoot];
+    // 归档路径中每层目录对应的磁盘目录：从 fileDir 逐级上溯到空
+    const dir = dirname(normalizePath(fileArchivePath));
+    const segs = dir ? dir.split('/') : [];
+    const chain: string[] = [];
+    for (let k = segs.length; k >= 0; k -= 1) {
+        chain.push(segs.slice(0, k).join('/'));
+    }
+    // 对每个基础根，按目录链生成 <root>/<subdir> 作为候选查找根
+    for (const base of roots) {
+        for (const sub of chain) {
+            push(sub ? join(base, sub) : base);
+        }
+    }
+    return out;
+}
+
 /** 判断某 node_modules/<name> 归档路径在某 root 下是否存在 */
 async function npmExistsInRoot(root: string, archivePath: string): Promise<boolean> {
     return fileExists(join(root, normalizePath(archivePath)));
 }
 
 async function readText(absPath: string): Promise<string | null> {
-    try {
-        const r = await Tools.Files.read(absPath);
-        return r && typeof r.content === 'string' ? r.content : null;
-    } catch (err) {
-        return null;
-    }
+    // 走 node.operit 的 fs（javabridge，原始内容，不带行号）；fs 不可用时内部回退 Tools.Files.read 并剥行号
+    return readTextSafeAsync(absPath);
 }
 
 async function fileExists(absPath: string): Promise<boolean> {
@@ -166,6 +213,7 @@ async function resolveLocalRequest(
     const baseDir = dirname(fromArchivePath);
     const target = normalizePath(join(baseDir, request));
     const roots = (depsRoots && depsRoots.length) ? depsRoots : [depsRoot];
+    const lookupRoots = nodeModuleLookupRoots(fromArchivePath, localRoot, depsRoots || [depsRoot]);
 
     // 候选顺序：显式扩展名优先，再补 .js / /index.js / .json
     const candidates: string[] = [];
@@ -184,6 +232,10 @@ async function resolveLocalRequest(
         // 本包内文件走 localRoot；node_modules 前缀走多 root 阶梯
         if (c2.indexOf(DEPS_PREFIX) === 0) {
             for (const r of roots) {
+                if (await fileExists(join(r, c2))) return c2;
+            }
+            // 嵌套依赖上溯：node_modules/<pkg>/... 的父层 node_modules 也纳入
+            for (const r of lookupRoots) {
                 if (await fileExists(join(r, c2))) return c2;
             }
         } else {
@@ -226,6 +278,7 @@ export async function collectReachable(opts: ReachabilityOptions): Promise<Reach
     const bareSet = new Set<string>();
     const missing: Array<{ from: string; name: string; reason: string }> = [];
     const violations: Array<{ from: string; name: string; reason: string }> = [];
+    const dynamicRequires: Array<{ from: string; prefix: string; line: number }> = [];
 
     const queue: string[] = [entry];
     const enqueued = new Set<string>([entry]);
@@ -252,6 +305,90 @@ export async function collectReachable(opts: ReachabilityOptions): Promise<Reach
         const occ = scanRequires(src);
         const localMap: Record<string, string> = {}; // bareName -> archivePath (''=whitelist)
         const needFollow: string[] = [];
+
+        // AST 扫描：检出动态 require（词法版无法识别），把前缀目录整目录收进归档
+        const astRes = scanRequiresAst(src);
+        if (astRes.ok) {
+            for (const call of astRes.calls) {
+                if (call.kind !== 'dynamic') continue;
+                dynamicRequires.push({ from: cur, prefix: call.prefix || '', line: call.line });
+                if (!call.prefix) continue; // 完全动态：只记录，由上层决定处置
+                const baseDir = dirname(cur);
+                const dirRel = normalizePath(baseDir ? (baseDir + '/' + call.prefix) : call.prefix);
+                if (!dirRel || isExcluded(dirRel, excludePrefixes)) continue;
+                // 候选目录：① 归档内路径（如 dist/libs）；
+                //           ② 剥离产物目录前缀后的路径（如 libs）；
+                //           ③ ②再加 src/（TS 源码目录常见布局，如 src/libs）
+                const cands: string[] = [dirRel];
+                if (opts.artifactDirRel) {
+                    const ad = normalizePath(opts.artifactDirRel);
+                    let stripped = dirRel;
+                    if (stripped === ad) stripped = '';
+                    else if (stripped.indexOf(ad + '/') === 0) stripped = stripped.slice(ad.length + 1);
+                    const st = normalizePath(stripped);
+                    if (st && cands.indexOf(st) < 0) cands.push(st);
+                    if (st && cands.indexOf('src/' + st) < 0) cands.push('src/' + st);
+                    if (cands.indexOf('src') < 0) cands.push('src');
+                }
+                // 找到真实命中的候选目录，并把命中的文件「重映射」回原始 dirRel：
+                //   hitCd='src/libs', f='src/libs/en.js', dirRel='dist/libs'
+                //   => archive='dist/libs/en.js'（运行时代码就是按 dirRel 拼路径的）
+                let hitCd = '';
+                let hitDisk = '';
+                let collected: string[] = []; // 归档内相对路径（已按 dirRel 重映射前，用 cd 前缀）
+                for (const cd of cands) {
+                    if (!cd || isExcluded(cd, excludePrefixes)) continue;
+                    // 候选目录必须是「磁盘上真实存在的目录」：
+                    //   注意用 resolveLocalDisk 才能命中 src/libs 这类反向剥的实体，
+                    //   直接 join(localRoot, cd) 会找不到（tsc 不搬运裸 .js）。
+                    const cdDisk = await resolveLocalDisk(cd, localRoot, opts.artifactDirRel);
+                    let isDir = false;
+                    try {
+                        const lst: any = await Tools.Files.list(cdDisk);
+                        const ents = lst && (lst.files || lst.entries || lst.children);
+                        if (Array.isArray(ents)) isDir = true;
+                    } catch (e) { isDir = false; }
+                    if (!isDir) continue;
+                    // 在真实磁盘目录上递归收集文件（相对 cd 的路径），不用 expandExtraEntry，
+                    // 因为后者按 join(localRoot, cd) 走，命中不了反向剥的实体。
+                    const rels: string[] = [];
+                    const walk = async (diskRel: string, relPath: string, depth: number): Promise<void> => {
+                        if (depth <= 0) return;
+                        let listing: any;
+                        try { listing = await Tools.Files.list(join(cdDisk, diskRel)); } catch (e) { return; }
+                        const ents = (listing && (listing.files || listing.entries || listing.children)) || [];
+                        for (const it of ents) {
+                            const name = it.name || it.fileName || '';
+                            if (!name) continue;
+                            const childDiskRel = normalizePath(diskRel ? diskRel + '/' + name : name);
+                            const childRel = normalizePath(relPath ? relPath + '/' + name : name);
+                            const isChildDir = it.isDirectory === true || it.type === 'directory' || it.directory === true;
+                            if (isChildDir) {
+                                if (name === 'node_modules' || name.startsWith('.')) continue;
+                                const cdChild = normalizePath(cd + '/' + childRel);
+                                if (isExcluded(cdChild, excludePrefixes)) continue;
+                                await walk(childDiskRel, childRel, depth - 1);
+                            } else {
+                                const cdChild = normalizePath(cd + '/' + childRel);
+                                if (isExcluded(cdChild, excludePrefixes)) continue;
+                                rels.push(childRel);
+                            }
+                        }
+                    };
+                    await walk('', '', 10);
+                    if (rels.length > 0) { hitCd = cd; hitDisk = cdDisk; collected = rels; break; }
+                }
+                for (const f of collected) {
+                    // f 是相对 cd 的路径；归档路径 = dirRel + 该相对路径
+                    const arch = normalizePath(dirRel + '/' + f);
+                    if (!arch || isExcluded(arch, excludePrefixes)) continue;
+                    if (!enqueued.has(arch)) {
+                        enqueued.add(arch);
+                        needFollow.push(arch);
+                    }
+                }
+            }
+        }
 
         for (const o of occ) {
             const req = o.value.trim();
@@ -281,17 +418,24 @@ export async function collectReachable(opts: ReachabilityOptions): Promise<Reach
 
             bareSet.add(req);
             // 解析裸名（从 depsRoot 读 node_modules / node.operit）
-            let resolved = bareCache.get(req);
+            const bareRoots: string[] = (opts.depsRoots && opts.depsRoots.length)
+                ? opts.depsRoots.slice()
+                : [depsRoot];
+            for (const lr of nodeModuleLookupRoots(cur, localRoot, bareRoots)) {
+                if (bareRoots.indexOf(lr) < 0) bareRoots.push(lr);
+            }
+            const ck = dirname(cur) + '|' + req;
+            let resolved = bareCache.get(ck);
             if (resolved === undefined) {
                 try {
-                    const r = await resolveBareName(depsRoot, contract, req, depsRoots);
+                    const r = await resolveBareName(depsRoot, contract, req, bareRoots);
                     resolved = { archivePath: r.archivePath, kind: r.kind };
                 } catch (e) {
                     const reason = e instanceof ResolveError ? e.message : String(e);
                     violations.push({ from: cur, name: req, reason: reason });
                     resolved = null;
                 }
-                bareCache.set(req, resolved);
+                bareCache.set(ck, resolved);
             }
             if (resolved && resolved.kind !== 'whitelist') {
                 localMap[req] = resolved.archivePath;
@@ -327,7 +471,8 @@ export async function collectReachable(opts: ReachabilityOptions): Promise<Reach
         files,
         bareNames: Array.from(bareSet),
         missing,
-        violations
+        violations,
+        dynamicRequires
     };
 }
 

@@ -1,6 +1,7 @@
 /**
  * package-lock.json 读写（npm lockfileVersion 3 简化结构）。
  */
+import { readTextSafeAsync } from './nodesafe';
 
 export interface LockPackage {
     version: string;
@@ -44,8 +45,8 @@ export async function readPackageJson(projectDir: string): Promise<any | null> {
         const p = pkgJsonPath(projectDir);
         const ex = await Tools.Files.exists(p);
         if (!ex || !ex.exists) return null;
-        const r = await Tools.Files.read(p);
-        return JSON.parse(r.content);
+        const text = await readTextSafeAsync(p);
+        return text === null ? null : JSON.parse(text);
     } catch (e) {
         return null;
     }
@@ -62,8 +63,8 @@ export async function readLockfile(projectDir: string): Promise<Lockfile | null>
         const p = lockPath(projectDir);
         const ex = await Tools.Files.exists(p);
         if (!ex || !ex.exists) return null;
-        const r = await Tools.Files.read(p);
-        return JSON.parse(r.content) as Lockfile;
+        const text = await readTextSafeAsync(p);
+        return text === null ? null : (JSON.parse(text) as Lockfile);
     } catch (e) {
         return null;
     }

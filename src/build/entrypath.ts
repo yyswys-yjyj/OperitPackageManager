@@ -6,6 +6,8 @@
 
 declare const Tools: any;
 
+import { readTextSafeAsync } from '../core/nodesafe';
+
 function normalizePath(p: string): string {
     if (!p) return '';
     const out: string[] = [];
@@ -24,12 +26,7 @@ function join(a: string, b: string): string {
 }
 
 async function readText(path: string): Promise<string | null> {
-    try {
-        const r = await Tools.Files.read(path);
-        return r && typeof r.content === 'string' ? r.content : null;
-    } catch (e) {
-        return null;
-    }
+    return readTextSafeAsync(path);
 }
 
 async function exists(path: string): Promise<boolean> {

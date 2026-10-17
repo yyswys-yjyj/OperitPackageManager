@@ -29,23 +29,33 @@ import { packToolpkg } from '../build/packer';
 import { normalizePath, scanGlobalRefs } from '../build/rewriter';
 import { prepareGlobalShadow, cleanupGlobalShadow } from '../build/globalshadow';
 import { isExcluded as isExcludedShared, expandExtraEntry } from '../build/extrafiles';
+import { renderPackInfo, PackInfoOptions } from '../build/packinfo';
+import { readTextSafeAsync } from '../core/nodesafe';
 
 export interface BuildOptions {
     /** 项目根目录（Android 侧绝对路径） */
     projectDir: string;
     /** 跳过编译（TS 模式才有效） */
     skipCompile?: boolean;
-    /** 编译输出目录（相对项目根，默认 .opm_build）——仅 TS 模式 */
+    /** 编译输出兜底目录（相对项目根，默认 .opm_build）——仅当 tsconfig 未声明 outDir 时用 */
     outDirRel?: string;
-    /** 组装临时目录（绝对路径），默认 <projectDir>/.opm_stage */
+    /** 组装临时目录（绝对路径），默认放在项目外系统临时区，构建后删除 */
     stageDir?: string;
     /** 产物文件名（不含 .toolpkg），默认取项目根目录名 */
     outName?: string;
+    /** 产物落盘目录（绝对路径），默认为项目根的上一级目录 */
+    outDir?: string;
     /**
      * 额外强制打包的文件（相对项目根的路径，如 LICENSE、README.md）。
      * 这些文件不在 require 链上，会被原样复制进归档（不做重写）。
      */
     extraFiles?: string[];
+    /**
+     * PACKINFO：打包信息核对（写进归档根的 `PACKINFO`，YAML，供市场审核）。
+     * 仅当 `enable === true` 时生成；否则不写该文件。
+     * license / author / name / description 用于补 manifest 缺失的字段。
+     */
+    packinfo?: PackInfoOptions;
 }
 
 export interface BuildReport {
@@ -62,6 +72,8 @@ export interface BuildReport {
     missing?: Array<{ from: string; name: string; reason: string }>;
     /** 额外文件注入结果（找到几个 / 缺失几个） */
     extraFiles?: { added: string[]; missing: string[] };
+    /** 动态 require 记录（prefix 空=完全动态，会导致构建失败） */
+    dynamicRequires?: Array<{ from: string; prefix: string; line: number }>;
     compileStdout?: string;
 }
 
@@ -72,13 +84,18 @@ function join(a: string, b: string): string {
 }
 
 async function readText(path: string): Promise<string | null> {
+    return readTextSafeAsync(path);
+}
+async function readBinaryBase64(path: string): Promise<string | null> {
     try {
-        const r = await Tools.Files.read(path);
-        return r && typeof r.content === 'string' ? r.content : null;
+        const bin = await Tools.Files.readBinary(path);
+        if (bin && typeof bin.contentBase64 === 'string') return bin.contentBase64;
+        return null;
     } catch (e) {
         return null;
     }
 }
+
 async function exists(path: string): Promise<boolean> {
     try {
         const e = await Tools.Files.exists(path);
@@ -191,7 +208,10 @@ function collectManifestSeeds(manifest: any, mainArchive: string): string[] {
 
 export async function runBuild(opts: BuildOptions): Promise<BuildReport> {
     const projectDir = opts.projectDir.replace(/\/+$/, '');
-    const stageDir = opts.stageDir || join(projectDir, '.opm_stage');
+    const projectName = projectDir.slice(projectDir.lastIndexOf('/') + 1);
+    const projectParent = projectDir.replace(/\/[^/]+$/, '');
+    // 临时组装目录放在项目外（项目父目录下以点开头），构建后删除；项目内不留痕
+    const stageDir = opts.stageDir || join(projectParent, '.opm_stage_' + projectName);
 
     // ---------- 1. manifest ----------
     const manifestPath = join(projectDir, 'manifest.json');
@@ -237,9 +257,12 @@ export async function runBuild(opts: BuildOptions): Promise<BuildReport> {
 
     // ---------- 4. 编译（仅 TS 模式）----------
     const outDirRel = opts.outDirRel || '.opm_build';
+    // 实际产物目录（compileProject 会优先采用 tsconfig 声明的 outDir）
+    let effectiveOutDirRel = outDirRel;
     let compileStdout = '';
     if (mode === 'ts' && !opts.skipCompile) {
         const c = await compileProject({ projectDir: projectDir, outDirRel: outDirRel });
+        effectiveOutDirRel = c.outDir || outDirRel;
         compileStdout = c.stdout;
         if (!c.ok) {
             return {
@@ -248,6 +271,10 @@ export async function runBuild(opts: BuildOptions): Promise<BuildReport> {
                 compileStdout: compileStdout
             };
         }
+    } else if (mode === 'ts' && opts.skipCompile) {
+        // 跳过编译时，仍尝试读 tsconfig 的 outDir 作为产物目录
+        const tc = await readTsconfigOutDirSafe(projectDir);
+        if (tc) effectiveOutDirRel = tc;
     }
 
     // 归档排除前缀：依赖目录 + 构建/暂存目录 + 全局影子目录
@@ -262,7 +289,7 @@ export async function runBuild(opts: BuildOptions): Promise<BuildReport> {
     }
 
     // ---------- 5. 计算可达种子 ----------
-    const artifactDirRel: string | null = (mode === 'ts') ? outDirRel : null;
+    const artifactDirRel: string | null = (mode === 'ts') ? effectiveOutDirRel : null;
 
     const nodeOperitDistArchive = normalizePath(contract.installDir + '/' + contract.distDir);
     const globalsOpts = {
@@ -320,6 +347,19 @@ export async function runBuild(opts: BuildOptions): Promise<BuildReport> {
         }
     }
 
+    // ---------- 6.8 动态 require 拦截：完全动态（无静态前缀）无法确定收哪些文件 ----------
+    const unresolvedDynamic = (reached.dynamicRequires || []).filter(d => !d.prefix);
+    if (unresolvedDynamic.length > 0) {
+        return {
+            ok: false, mode: mode, stage: 'dynamic-require',
+            message: '存在无法确定前缀的动态 require（无法定位目标目录），请改为显式路径：' +
+                unresolvedDynamic.map(d => d.from + ':' + d.line).join(', '),
+            dynamicRequires: reached.dynamicRequires,
+            bareNames: reached.bareNames,
+            compileStdout: compileStdout
+        };
+    }
+
     // ---------- 7. 契约拦截 ----------
     if (reached.violations.length > 0) {
         return {
@@ -361,14 +401,52 @@ export async function runBuild(opts: BuildOptions): Promise<BuildReport> {
         }
         for (const rel2 of expanded) {
             if (files.has(rel2)) { extraAdded.push(rel2); continue; }
-            let content: string | null = await readText(join(projectDir, rel2));
-            if (content === null && artifactDirRel) content = await readText(join(join(projectDir, artifactDirRel), rel2));
-            if (content === null) {
+            // 定位磁盘实体：项目根 -> 产物目录（ts 模式资源可能被 tsc 拷过去）
+            let disk = join(projectDir, rel2);
+            let exists0 = await exists(disk);
+            if (!exists0 && artifactDirRel) {
+                const alt = join(join(projectDir, artifactDirRel), rel2);
+                if (await exists(alt)) { disk = alt; exists0 = true; }
+            }
+            if (!exists0) {
                 extraMissing.push(rel2 + '（文件不存在）');
                 continue;
             }
-            files.set(rel2, { text: content, kind: 'extra' });
+            // 按扩展名分流：文本白名单走 read，其余（图片/字体/wasm/二进制）走 readBinary。
+            // 注意：Tools.Files.read 对二进制不抛异常，而是返回 "Failed to decode image file."
+            // 之类的错误串——故不能只靠读失败判断，必须按扩展名 + 内容兜底双保险。
+            const isTextExt = /\.(js|mjs|cjs|ts|tsx|jsx|json|json5|txt|md|markdown|html|htm|css|scss|less|xml|svg|yaml|yml|toml|ini|cfg|conf|csv|tsv|map|sh|bat|ps1|py|java|kt|c|h|cpp|hpp|go|rs|rb|php|sql|graphql|vue|svelte|env|gitignore|npmrc|editorconfig|license|readme)$/i.test(rel2);
+            let content: string | null = null;
+            if (isTextExt) content = await readText(disk);
+            // 兜底：命中 read 的二进制错误串 -> 视为二进制
+            if (content === 'Failed to decode image file.') content = null;
+            if (content !== null) {
+                files.set(rel2, { text: content, kind: 'extra' });
+            } else {
+                const b64 = await readBinaryBase64(disk);
+                if (b64 === null) {
+                    extraMissing.push(rel2 + '（读取失败）');
+                    continue;
+                }
+                files.set(rel2, { text: '', binary: b64, kind: 'extra' });
+            }
             extraAdded.push(rel2);
+        }
+    }
+
+    // ---------- 7.6 PACKINFO（可选：市场审核信息核对）----------
+    // 仅当 opts.packinfo.enable === true 时生成，写进归档根的 `PACKINFO`（YAML，无扩展名）。
+    // 不列举 extra_files；dependencies 由归档里实际收进的 node_modules 包自动推导。
+    let packinfoAdded = false;
+    if (opts.packinfo && opts.packinfo.enable === true) {
+        const packinfoText = renderPackInfo(
+            manifest as Record<string, unknown>,
+            opts.packinfo,
+            files.keys()
+        );
+        if (packinfoText !== null) {
+            files.set('PACKINFO', { text: packinfoText, kind: 'extra' });
+            packinfoAdded = true;
         }
     }
 
@@ -396,7 +474,8 @@ export async function runBuild(opts: BuildOptions): Promise<BuildReport> {
         files: files,
         manifestText: manifestText,
         stageDir: stageDir,
-        outName: opts.outName
+        outName: opts.outName,
+        outDir: opts.outDir
     });
 
     if (!pack.ok) {
@@ -413,11 +492,67 @@ export async function runBuild(opts: BuildOptions): Promise<BuildReport> {
         stage: 'done',
         message: '构建成功（' + mode + ' 模式）：' + pack.message + (shadowMsg ? '｜' + shadowMsg : '') +
                  (extraAdded.length ? '｜额外文件 +' + extraAdded.length : '') +
-                 (extraMissing.length ? '｜额外文件缺失 ' + extraMissing.length : ''),
+                 (extraMissing.length ? '｜额外文件缺失 ' + extraMissing.length : '') +
+                 (packinfoAdded ? '｜PACKINFO' : ''),
         toolpkgPath: pack.toolpkgPath,
         fileCount: pack.fileCount,
         bareNames: reached.bareNames,
         extraFiles: { added: extraAdded, missing: extraMissing },
+        dynamicRequires: reached.dynamicRequires,
         compileStdout: compileStdout
     };
+}
+
+
+/** 读 tsconfig 的 outDir（用于 skipCompile 时定位产物目录）；无则 null */
+async function readTsconfigOutDirSafe(projectDir: string): Promise<string | null> {
+    try {
+        const r = await readTextSafeAsync(projectDir + '/tsconfig.json');
+        if (typeof r !== 'string') return null;
+        const j = parseTsconfigLoose(r);
+        const co = (j && j.compilerOptions) || {};
+        const od = co.outDir;
+        if (typeof od !== 'string' || !od.trim()) return null;
+        let t = od.trim();
+        if (t.indexOf('./') === 0) t = t.slice(2);
+        return t;
+    } catch (e) {
+        return null;
+    }
+}
+
+/** 宽松解析 tsconfig：手工剥注释与尾逗号（不用正则，避开转义陷阱）。 */
+function parseTsconfigLoose(raw: string): any {
+    let out = '';
+    const n = raw.length;
+    let i = 0;
+    let inStr = false;
+    let strQ = '';
+    while (i < n) {
+        const c = raw[i];
+        const c2 = raw[i + 1];
+        if (inStr) {
+            out += c;
+            if (c === String.fromCharCode(92)) { out += (c2 || ''); i += 2; continue; }
+            if (c === strQ) inStr = false;
+            i += 1;
+            continue;
+        }
+        if (c === '"' || c === "'") { inStr = true; strQ = c; out += c; i += 1; continue; }
+        if (c === '/' && c2 === '*') {
+            i += 2;
+            while (i < n && !(raw[i] === '*' && raw[i + 1] === '/')) i += 1;
+            i += 2;
+            continue;
+        }
+        if (c === '/' && c2 === '/') {
+            i += 2;
+            while (i < n && raw[i] !== String.fromCharCode(10)) i += 1;
+            continue;
+        }
+        out += c;
+        i += 1;
+    }
+    out = out.replace(/,(\s*[}\]])/g, '$1');
+    return JSON.parse(out);
 }

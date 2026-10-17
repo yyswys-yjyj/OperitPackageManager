@@ -22,10 +22,12 @@ export interface ResolveResult {
     warnings: string[];
 }
 
-/** 解析一组顶层依赖 */
+/** 解析一组顶层依赖
+ *  registryResolver：给定包名返回该包应使用的 registry（未提供则用全局默认）
+ */
 export async function resolveDependencies(
     rootDeps: Record<string, string>,
-    registryOverride?: string,
+    registryResolver?: (name: string) => string | undefined,
     onProgress?: (msg: string) => void
 ): Promise<ResolveResult> {
     const nodes: Record<string, ResolvedNode> = {};
@@ -51,7 +53,8 @@ export async function resolveDependencies(
 
         let doc;
         try {
-            doc = await fetchDoc(item.name, registryOverride);
+            const ov = registryResolver ? registryResolver(item.name) : undefined;
+            doc = await fetchDoc(item.name, ov);
         } catch (e) {
             warnings.push('无法获取 ' + item.name + ': ' + String(e));
             continue;

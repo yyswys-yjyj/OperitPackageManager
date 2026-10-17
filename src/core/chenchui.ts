@@ -34,16 +34,22 @@ export interface ChenchuiResult {
     [k: string]: any;
 }
 
-/** 软件包定位参数（id 优先于 package_id） */
+/** 软件包定位参数（id 优先于 package_id；node/version 限定版本节点） */
 export interface PkgLocator {
     id?: number;
     package_id?: string;
+    /** 版本节点数字 ID，优先级最高 */
+    node?: number;
+    /** 版本号（按版本号找节点） */
+    version?: string;
 }
 
 function withLocator(base: Record<string, any>, locator?: PkgLocator): Record<string, any> {
     if (locator) {
         if (locator.id !== undefined && locator.id !== null) base.id = locator.id;
         if (locator.package_id) base.package_id = locator.package_id;
+        if (locator.node !== undefined && locator.node !== null) base.node = locator.node;
+        if (locator.version) base.version = locator.version;
     }
     return base;
 }

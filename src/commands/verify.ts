@@ -12,8 +12,10 @@ import { compileProject } from '../build/compiler';
 import { collectReachable } from '../build/reachability';
 import { normalizePath } from '../build/rewriter';
 import { prepareGlobalShadow, cleanupGlobalShadow } from '../build/globalshadow';
+import { readTextSafeAsync } from '../core/nodesafe';
 import { isExcluded as isExcludedShared, expandExtraEntry } from '../build/extrafiles';
 import { readTsconfigOutDir, normalizeEntryRel } from '../build/entrypath';
+import { simulateRegistration, simulateSubpackageMeta, SubpackageMetaResult, RegistrationResult } from './simulate';
 
 export interface VerifyOptions {
     projectDir: string;
@@ -32,6 +34,10 @@ export interface VerifyReport {
     violations?: Array<{ from: string; name: string; reason: string }>;
     missing?: Array<{ from: string; name: string; reason: string }>;
     extraFiles?: { added: string[]; missing: string[] };
+    /** 模拟加载：注册期 */
+    registration?: RegistrationResult;
+    /** 模拟加载：子包 metadata 解析 */
+    subpackages?: SubpackageMetaResult[];
     compileStdout?: string;
 }
 
@@ -42,12 +48,7 @@ function join(a: string, b: string): string {
 }
 
 async function readText(path: string): Promise<string | null> {
-    try {
-        const r = await Tools.Files.read(path);
-        return r && typeof r.content === 'string' ? r.content : null;
-    } catch (e) {
-        return null;
-    }
+    return readTextSafeAsync(path);
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -166,12 +167,14 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyReport> {
     }
 
     const excludePrefixes = ['.opm_build', '.opm_stage', '.git', '.opm_verify'];
-    const compileRoot = mode === 'ts' ? join(projectDir, outDirRel) : projectDir;
+    // 实际产物目录：TS 模式优先用 tsconfig 声明的 outDir（与 build 一致）
+    const tsOutDir = mode === 'ts' ? await readTsconfigOutDir(projectDir) : null;
+    const effectiveOutDirRel = (mode === 'ts' && tsOutDir) ? tsOutDir : outDirRel;
+    const compileRoot = mode === 'ts' ? join(projectDir, effectiveOutDirRel) : projectDir;
 
     // 入口路径归一化：manifest 里是「相对项目根」，归档里要的是「相对产物根」
-    const tsOutDir = mode === 'ts' ? await readTsconfigOutDir(projectDir) : null;
     if (mode === 'ts') {
-        entryArchive = await normalizeEntryRel(entryRaw, compileRoot, tsOutDir);
+        entryArchive = await normalizeEntryRel(entryRaw, join(projectDir, effectiveOutDirRel), tsOutDir);
     }
 
     // ---- 种子 ----
@@ -184,7 +187,7 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyReport> {
         }
     } else {
         for (const s of collectManifestSeeds(manifest, entryArchive)) {
-            const rs = (s === entryArchive) ? s : await normalizeEntryRel(s, compileRoot, tsOutDir);
+            const rs = (s === entryArchive) ? s : await normalizeEntryRel(s, join(projectDir, effectiveOutDirRel), tsOutDir);
             if (rs !== entryArchive) extraSeeds.push(rs);
         }
     }
@@ -192,13 +195,14 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyReport> {
     let reached;
     try {
         reached = await collectReachable({
-            localRoot: compileRoot,
+            localRoot: projectDir,
             depsRoot: projectDir,
             depsRoots: depsRoots,
             contract: contract,
             entryRel: entryArchive,
             extraEntries: extraSeeds,
-            excludePrefixes: excludePrefixes
+            excludePrefixes: excludePrefixes,
+            artifactDirRel: (mode === 'ts') ? effectiveOutDirRel : null
         });
     } catch (e) {
         await cleanupGlobalShadow(projectDir);
@@ -248,16 +252,63 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyReport> {
         }
     }
 
+    // ---- 模拟加载（静态）----
+    // 段 1：注册期——分析 main 脚本
+    const mainFileObj = reached.files.get(entryArchive);
+    const mainText = mainFileObj ? mainFileObj.text : (await readText(join(compileRoot, entryArchive)) || '');
+    const registration = simulateRegistration(mainText);
+
+    // 段 2：子包 metadata——读每个 subpackage entry
+    const subMetaResults: SubpackageMetaResult[] = [];
+    const subsRaw = manifest.subpackages || manifest.sub_packages || [];
+    if (Array.isArray(subsRaw)) {
+        for (const s of subsRaw) {
+            if (!s || typeof s.entry !== 'string' || !s.entry) continue;
+            let entryRel = normalizePath(s.entry);
+            if (mode === 'ts') entryRel = await normalizeEntryRel(entryRel, compileRoot, tsOutDir);
+            const fo = reached.files.get(entryRel);
+            const txt = fo ? fo.text : (await readText(join(compileRoot, entryRel)) || await readText(join(projectDir, entryRel)) || '');
+            if (!txt) {
+                subMetaResults.push({
+                    entry: entryRel, hasMeta: false, parsed: false,
+                    issues: [{ tool: '-', reason: '子包 entry 文件不存在或不可读' }]
+                });
+                continue;
+            }
+            subMetaResults.push(simulateSubpackageMeta(entryRel, txt));
+        }
+    }
+
+    const simIssues: string[] = [];
+    if (registration.issues.length > 0) simIssues.push(...registration.issues);
+    for (const sm of subMetaResults) {
+        if (sm.issues.length > 0) simIssues.push(sm.entry + '：' + sm.issues.map(i => i.tool + '(' + i.reason + ')').join('；'));
+    }
+    if (simIssues.length > 0) {
+        return {
+            ok: false, mode: mode, stage: 'simulate',
+            message: '模拟加载未通过：' + simIssues.join(' | '),
+            registration: registration,
+            subpackages: subMetaResults,
+            bareNames: reached.bareNames,
+            compileStdout: compileStdout
+        };
+    }
+
     return {
         ok: true,
         mode: mode,
         stage: 'done',
         message: '校验通过（' + mode + ' 模式）：' + reached.files.size + ' 个文件可达，' +
-                 reached.bareNames.length + ' 个裸名全部可解析。' +
+                 reached.bareNames.length + ' 个裸名全部可解析；' +
+                 '注册期 OK（' + registration.registrationApis.length + ' 个注册 API）；' +
+                 '子包 metadata ' + subMetaResults.length + ' 个全部合法。' +
                  (extraAdded.length ? '｜额外文件 ' + extraAdded.length + ' 个可用' : '') +
                  (extraMissing.length ? '｜额外文件缺失 ' + extraMissing.length : ''),
         bareNames: reached.bareNames,
         extraFiles: { added: extraAdded, missing: extraMissing },
+        registration: registration,
+        subpackages: subMetaResults,
         compileStdout: compileStdout
     };
 }

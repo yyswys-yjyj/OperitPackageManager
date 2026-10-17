@@ -25,6 +25,8 @@ export interface PackOptions {
     outName?: string;
     /** 临时组装目录（绝对路径） */
     stageDir: string;
+    /** 产物落盘目录（绝对路径），默认为项目根的上一级目录 */
+    outDir?: string;
 }
 
 export interface PackResult {
@@ -66,14 +68,24 @@ export async function packToolpkg(opts: PackOptions): Promise<PackResult> {
         const abs = join(stage, relPath);
         const parent = abs.slice(0, abs.lastIndexOf('/'));
         await hidden('mkdir -p ' + shq(parent), 15000);
-        await writeFile(abs, file.text);
+        // 二进制资源（base64）走 writeBinary，其余走文本 write
+        if (file.binary !== undefined) {
+            await writeBinaryFile(abs, file.binary);
+        } else {
+            await writeFile(abs, file.text);
+        }
         count += 1;
     }
 
     // 4. 压成 .toolpkg（zip，不含顶层目录）
     const name = opts.outName || baseName(opts.projectDir);
     const parentOfProject = opts.projectDir.replace(/\/+$/, '').replace(/\/[^/]+$/, '');
-    const toolpkgPath = join(parentOfProject, name + '.toolpkg');
+    const destDir = (opts.outDir && opts.outDir.trim())
+        ? opts.outDir.replace(/\/+$/, '')
+        : parentOfProject;
+    // 确保落盘目录存在
+    await hidden('mkdir -p ' + shq(destDir), 15000);
+    const toolpkgPath = join(destDir, name + '.toolpkg');
 
     const zipRes = await zipDir(stage, toolpkgPath);
     if (!zipRes.ok) {
@@ -99,12 +111,25 @@ async function zipDir(srcDir: string, destZip: string): Promise<{ ok: boolean; m
     try {
         // include_root_directory=false：归档里直接是 manifest.json 等，不含 srcDir 这一层
         const r = await Tools.Files.zip(srcDir, destZip, 'android', false);
-        if (r && (r.success === false)) {
+        if (r && ((r as any).success === false)) {
             return { ok: false, message: JSON.stringify(r) };
         }
         return { ok: true, message: 'ok' };
     } catch (e) {
         return { ok: false, message: String(e) };
+    }
+}
+
+async function writeBinaryFile(path: string, base64: string): Promise<void> {
+    try {
+        await Tools.Files.writeBinary(path, base64);
+    } catch (e) {
+        const Base64 = Java.type('android.util.Base64');
+        const bytes = Base64.decode(base64, 0);
+        const FileOutputStream = Java.type('java.io.FileOutputStream');
+        const fos = new FileOutputStream(path);
+        fos.write(bytes);
+        fos.close();
     }
 }
 

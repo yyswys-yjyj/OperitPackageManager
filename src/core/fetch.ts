@@ -20,16 +20,34 @@ export async function ensureDirs(): Promise<void> {
     await Tools.Files.mkdir(TMP_DIR, true);
 }
 
-/** 由包名与版本生成安全的缓存文件名 */
-export function cacheFileName(name: string, version: string): string {
+/** 由包名与版本生成安全的缓存文件名（带 registry 源标识，避免跨源串包） */
+export function cacheFileName(name: string, version: string, sourceTag?: string): string {
     const safe = name.replace(/^@/, '').replace(/[\/\\]/g, '__');
-    return safe + '-' + version + '.tgz';
+    const tag = sourceTag ? '-' + sourceTag.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24) : '';
+    return safe + '-' + version + tag + '.tgz';
 }
 
-/** 下载 tarball 到缓存目录，返回本地路径 */
+/** 从 tarball URL 提取源标识（host + 路径 hash），用于缓存隔离 */
+export function sourceTagOf(tarballUrl: string): string {
+    try {
+        const u = String(tarballUrl || '');
+        const m = /^https?:\/\/([^/]+)/i.exec(u);
+        let h = '';
+        if (m) { return m[1].replace(/[^a-zA-Z0-9]/g, ''); }
+        // 无 host：用 URL 的简单 hash
+        let hh = 0;
+        for (let i = 0; i < u.length; i++) { hh = ((hh << 5) - hh + u.charCodeAt(i)) | 0; }
+        h = 'h' + (hh >>> 0).toString(36);
+        return h;
+    } catch (e) {
+        return 'x';
+    }
+}
+
+/** 下载 tarball 到缓存目录，返回本地路径（缓存按「源 + 包名 + 版本」隔离） */
 export async function downloadTarball(tarballUrl: string, name: string, version: string): Promise<string> {
     await ensureDirs();
-    const dest = CACHE_DIR + '/' + cacheFileName(name, version);
+    const dest = CACHE_DIR + '/' + cacheFileName(name, version, sourceTagOf(tarballUrl));
     const exist = await Tools.Files.exists(dest);
     if (exist && exist.exists && (exist.size || 0) > 0) {
         return dest;

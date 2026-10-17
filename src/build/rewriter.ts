@@ -10,6 +10,8 @@
  * 本模块只做「文本 → 文本」，不碰文件系统；解析目标由调用方传入 resolver 回调。
  */
 
+import * as acorn from 'acorn';
+
 export interface RewriteTarget {
     /** 重写后的请求串（相对本文件的路径，如 './node_modules/@serveryyswys/node.operit/dist/fs.js'） */
     request: string;
@@ -53,13 +55,89 @@ interface RequireOccurrence {
     value: string;
     /** 引号字符 */
     quote: string;
+    /** require('x') 还是 require.resolve('x') */
+    kind: 'require' | 'resolve';
 }
 
 /**
- * 扫描源码里所有形如 require('xxx') / require("xxx") 的调用，
- * 跳过注释与所有字符串字面量内容（避免误报）。
+ * 用 acorn AST 精确扫描 require('x') / require.resolve('x')。
+ * 只收「参数是字符串字面量」的调用（静态形态）；动态参数交给 astscan 的前缀收集，这里跳过。
+ * 相比词法版：不会误抓注释/正则/字符串里的 `require` 字样。
+ * 解析失败返回 null，由调用方回退词法扫描。
+ */
+export function scanRequiresViaAst(code: string): RequireOccurrence[] | null {
+    let ast: any;
+    try {
+        ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'script', allowReturnOutsideFunction: true } as any);
+    } catch (_e) {
+        try {
+            ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module', allowReturnOutsideFunction: true } as any);
+        } catch (_e2) {
+            return null;
+        }
+    }
+    const out: RequireOccurrence[] = [];
+    const seen = new Set<number>();
+    const visit = (node: any): void => {
+        if (!node || typeof node !== 'object') return;
+        if (node.type === 'CallExpression' || node.type === 'OptionalCallExpression') {
+            const callee = node.callee;
+            let kind: 'require' | 'resolve' | null = null;
+            if (callee && callee.type === 'Identifier' && callee.name === 'require') {
+                kind = 'require';
+            } else if (
+                callee && callee.type === 'MemberExpression' && !callee.computed &&
+                callee.object && callee.object.type === 'Identifier' && callee.object.name === 'require' &&
+                callee.property && callee.property.type === 'Identifier' && callee.property.name === 'resolve'
+            ) {
+                kind = 'resolve';
+            }
+            if (kind !== null) {
+                const arg = node.arguments && node.arguments[0];
+                if (arg && arg.type === 'Literal' && typeof arg.value === 'string' && !seen.has(arg.start)) {
+                    seen.add(arg.start);
+                    const q = code[arg.start];
+                    const isQuote = (q === '"' || q === '\'' || q === '`');
+                    // 与词法版保持一致：argStart/argEnd 覆盖「含引号」的整段，替换时连引号一起换掉
+                    out.push({
+                        argStart: arg.start,
+                        argEnd: arg.end,
+                        value: arg.value,
+                        quote: isQuote ? q : '"',
+                        kind: kind
+                    });
+                }
+            }
+        }
+        for (const key of Object.keys(node)) {
+            if (key === 'loc' || key === 'start' || key === 'end' || key === 'range') continue;
+            const v = node[key];
+            if (Array.isArray(v)) {
+                for (const c of v) if (c && typeof c.type === 'string') visit(c);
+            } else if (v && typeof v.type === 'string') {
+                visit(v);
+            }
+        }
+    };
+    visit(ast);
+    return out;
+}
+
+/**
+ * 扫描源码里的 require(...) / require.resolve(...) 调用（带精确参数位置）。
+ * 首选 AST（精确、不会误抓注释/正则/字符串）；解析失败时回退词法扫描。
  */
 export function scanRequires(code: string): RequireOccurrence[] {
+    const viaAst = scanRequiresViaAst(code);
+    if (viaAst !== null) return viaAst;
+    return scanRequiresLexical(code);
+}
+
+/**
+ * 词法扫描（回退用）：扫描 require('xxx') / require.resolve('xxx') 的字符串参数位置。
+ * 注意：本实现不处理正则字面量，极端情况下可能误抓；正常路径由 AST 版兜底。
+ */
+function scanRequiresLexical(code: string): RequireOccurrence[] {
     const out: RequireOccurrence[] = [];
     const n = code.length;
     let i = 0;
@@ -91,9 +169,49 @@ export function scanRequires(code: string): RequireOccurrence[] {
             while (i < n && isIdentPart(code[i])) i += 1;
             const word = code.slice(start, i);
             if (word === 'require') {
-                // 允许空白后跟 (
+                // 允许空白后跟 ( 或 .resolve(
                 let j = i;
                 while (j < n && /\s/.test(code[j])) j += 1;
+                // 识别 require.resolve(...)
+                if (code[j] === '.') {
+                    const dot = j;
+                    let m = j + 1;
+                    while (m < n && isIdentPart(code[m])) m += 1;
+                    const member = code.slice(dot + 1, m);
+                    if (member !== 'resolve') {
+                        continue;
+                    }
+                    let k2 = m;
+                    while (k2 < n && /\s/.test(code[k2])) k2 += 1;
+                    if (code[k2] !== '(') {
+                        continue;
+                    }
+                    k2 += 1;
+                    while (k2 < n && /\s/.test(code[k2])) k2 += 1;
+                    const q2 = code[k2];
+                    if (q2 === '"' || q2 === '\'' || q2 === '`') {
+                        const literalStart2 = k2;
+                        const end2 = skipString(code, literalStart2, q2);
+                        let kk = end2;
+                        while (kk < n && /\s/.test(code[kk])) kk += 1;
+                        const isConcat2 = (kk < n && code[kk] === '+');
+                        const tplDynamic2 = (q2 === '`' && raw_has_interp(code.slice(literalStart2, end2)));
+                        if (!isConcat2 && !tplDynamic2) {
+                            const raw2 = code.slice(literalStart2, end2);
+                            const value2 = unescapeLiteral(raw2, q2);
+                            out.push({
+                                argStart: literalStart2,
+                                argEnd: end2,
+                                value: value2,
+                                quote: q2,
+                                kind: 'resolve'
+                            });
+                        }
+                        i = end2;
+                        continue;
+                    }
+                    continue;
+                }
                 if (code[j] === '(') {
                     j += 1;
                     while (j < n && /\s/.test(code[j])) j += 1;
@@ -101,14 +219,23 @@ export function scanRequires(code: string): RequireOccurrence[] {
                     if (q === '"' || q === '\'' || q === '`') {
                         const literalStart = j;
                         const end = skipString(code, literalStart, q);
-                        const raw = code.slice(literalStart, end); // 含引号
-                        const value = unescapeLiteral(raw, q);
-                        out.push({
-                            argStart: literalStart,
-                            argEnd: end,
-                            value: value,
-                            quote: q
-                        });
+                        // 动态检测：字符串字面量之后若是 '+' 拼接（或模板串内含 ${}），
+                        // 说明是表达式的一部分，不算静态 require，交给 AST 扫描处理。
+                        let k = end;
+                        while (k < n && /\s/.test(code[k])) k += 1;
+                        const isConcat = (k < n && code[k] === '+');
+                        const tplDynamic = (q === '`' && raw_has_interp(code.slice(literalStart, end)));
+                        if (!isConcat && !tplDynamic) {
+                            const raw = code.slice(literalStart, end); // 含引号
+                            const value = unescapeLiteral(raw, q);
+                            out.push({
+                                argStart: literalStart,
+                                argEnd: end,
+                                value: value,
+                                quote: q,
+                                kind: 'require'
+                            });
+                        }
                         i = end;
                         continue;
                     }
@@ -119,6 +246,11 @@ export function scanRequires(code: string): RequireOccurrence[] {
         i += 1;
     }
     return out;
+}
+
+/** 模板串字面量文本里是否含 ${} 插值 */
+function raw_has_interp(raw: string): boolean {
+    return raw.indexOf('${') >= 0;
 }
 
 function isIdentStart(c: string): boolean {
@@ -333,11 +465,48 @@ export function rewriteSource(code: string, opts: RewriteOptions): RewriteResult
         }
 
         const literal = o.quote + escapeLiteral(newReq, o.quote) + o.quote;
+        if (o.kind === 'resolve') {
+            // require.resolve('pkg') -> '<相对路径>'
+            // 运行时没有 require.resolve（operit 的 require 是纯函数），
+            // 且没有真实绝对路径概念，因此替换成「可被 require 的归档内相对路径」字面量。
+            const span = findResolveSpan(result, o);
+            if (span) {
+                result = result.slice(0, span.start) + literal + result.slice(span.end);
+            } else {
+                // 兜底：至少把参数字符串换掉
+                result = result.slice(0, o.argStart) + literal + result.slice(o.argEnd);
+            }
+            changes.push({ from: req, to: newReq, kind: 'resolve' });
+            continue;
+        }
         result = result.slice(0, o.argStart) + literal + result.slice(o.argEnd);
         changes.push({ from: req, to: newReq, kind: target.kind });
     }
 
     return { code: result, changes: changes };
+}
+/**
+ * 找 `require.resolve('...')` 的完整跨度：从 `require` 的 r 到闭合 `)`。
+ * 从 occurrence 的 argStart 往前扫到最近的 `require.resolve(`，往后扫到匹配的 `)`。
+ * 找不到返回 null（调用方退回只替换参数字符串）。
+ */
+function findResolveSpan(code: string, o: RequireOccurrence): { start: number; end: number } | null {
+    // 往前找 require.resolve( 的起点
+    const head = code.slice(0, o.argStart);
+    // 用 'req' + 'uire' 拼接，避免本函数自身被词法扫描器误判为一次 require 调用
+    const kw = 'req' + 'uire';
+    const idx = head.lastIndexOf(kw);
+    if (idx < 0) return null;
+    // 校验 idx..argStart 之间形如 require.resolve(
+    const between = code.slice(idx, o.argStart);
+    const re = new RegExp('^' + kw + '\\s*\\.\\s*resolve\\s*\\(\\s*$');
+    if (!re.test(between)) return null;
+    // 往后找闭合 )
+    let k = o.argEnd;
+    const n = code.length;
+    while (k < n && /\s/.test(code[k])) k += 1;
+    if (code[k] !== ')') return null;
+    return { start: idx, end: k + 1 };
 }
 
 export { WHITELIST };

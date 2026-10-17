@@ -3,6 +3,8 @@
  * 存储位置：/sdcard/Download/Operit/plugins/com.operit.serveryyswys.opm/opm.config.json
  */
 
+import { readTextSafeAsync } from './nodesafe';
+
 export interface OpmConfig {
     /** npm registry 源，默认辰锤私有源 */
     registry: string;
@@ -51,8 +53,9 @@ export async function loadConfig(_force?: boolean): Promise<OpmConfig> {
     try {
         const exists = await Tools.Files.exists(CONFIG_PATH);
         if (exists && exists.exists) {
-            const r = await Tools.Files.read(CONFIG_PATH);
-            const parsed = JSON.parse(r.content);
+            const text = await readTextSafeAsync(CONFIG_PATH);
+            if (text === null) return base;
+            const parsed = JSON.parse(text);
             return Object.assign(base, parsed);
         }
     } catch (e) {

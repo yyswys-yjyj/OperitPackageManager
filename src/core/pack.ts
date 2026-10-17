@@ -12,6 +12,8 @@
  *   3. tar -czf 产出 .tgz
  */
 
+import { readTextSafeAsync } from './nodesafe';
+
 export interface PackOptions {
     /** 项目根目录（Android 侧绝对路径） */
     projectDir: string;
@@ -71,8 +73,8 @@ async function readPackageJson(projectDir: string): Promise<any | null> {
         const p = join(projectDir, 'package.json');
         const ex = await Tools.Files.exists(p);
         if (!ex || !ex.exists) return null;
-        const r = await Tools.Files.read(p);
-        return JSON.parse(r.content);
+        const text = await readTextSafeAsync(p);
+        return text === null ? null : JSON.parse(text);
     } catch (e) {
         return null;
     }

@@ -4,6 +4,7 @@
  */
 
 declare const Tools: any;
+import { readTextSafeAsync } from '../../core/nodesafe';
 
 const CONFIG_DIR = '/sdcard/Download/Operit/plugins/com.operit.serveryyswys.opm';
 const CONFIG_PATH = CONFIG_DIR + '/opm.config.json';
@@ -28,8 +29,9 @@ async function readCfg() {
     try {
         const ex = await Tools.Files.exists(CONFIG_PATH);
         if (ex && ex.exists) {
-            const r = await Tools.Files.read(CONFIG_PATH);
-            return Object.assign(base, JSON.parse(r.content));
+            const text = await readTextSafeAsync(CONFIG_PATH);
+            if (text === null) return base;
+            return Object.assign(base, JSON.parse(text));
         }
     } catch (e) { /* ignore */ }
     return base;
